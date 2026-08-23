@@ -32,6 +32,7 @@ import soundfile as sf
 from tqdm import tqdm
 
 from ..channel.chain import ProceduralChannel, UtteranceMeta
+from ..channel.learned.backend import CalibratedChannel
 from ..channel.primitives import TARGET_SR, NoiseBank, pink_noise
 from ..config import GeneratorConfig, QCConfig, dump_resolved
 from ..eval.qc import QCConfig as QCGates
@@ -63,7 +64,10 @@ def make_backend(config: GeneratorConfig, name: str | None = None):
             config.channel, noise_bank=noise_bank,
             target_sr=config.output.sample_rate)
     if name == "calibrated":
-        raise NotImplementedError("the calibrated backend lands in M2.3")
+        if config.calibrated is None:
+            raise ValueError("mode 'calibrated' requires a calibrated section")
+        return CalibratedChannel.from_config(
+            config.calibrated, target_sr=config.output.sample_rate)
     raise ValueError(f"unknown channel backend: {name}")
 
 

@@ -374,11 +374,14 @@ def test_mix_mode_draws_both_backends(tmp_path, monkeypatch):
     assert {record["gen"]["mode"] for record in read_manifest(manifest)} == set(drawn)
 
 
-def test_calibrated_backend_is_not_implemented_yet(tmp_path):
+def test_calibrated_backend_needs_its_config_section(tmp_path):
+    """The builder's own guard; `tests/test_calibrated.py` covers the backend."""
     path = tmp_path / "mode2.yaml"
     path.write_text("mode: calibrated\n")
-    with pytest.raises(NotImplementedError, match="M2.3"):
-        make_backend(load_config(path))
+    config = load_config(path)
+    config.calibrated = None
+    with pytest.raises(ValueError, match="requires a calibrated section"):
+        make_backend(config)
 
 
 def test_procedural_backend_receives_configured_noise_bank(tmp_path):
