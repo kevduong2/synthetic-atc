@@ -368,13 +368,33 @@ def test_noise_bank_crops_and_tiles(tmp_path):
     sf.write(tmp_path / "noise_00000.wav", bed, SR)
     bank = NoiseBank(tmp_path)
 
-    assert len(bank.sample(SR * 2, random.Random(0))) == SR * 2      # tiled
+    assert len(bank.sample(SR * 2, random.Random(0))) == SR * 2      # stitched
     assert len(bank.sample(SR // 4, random.Random(0))) == SR // 4    # cropped
 
     x = _tone(sec=1.0)
     y = P.additive_noise(x, SR, random.Random(0), snr_db=10.0, noise_bank=bank, bed_prob=1.0)
     measured = 10 * np.log10(np.mean(x ** 2) / np.mean((y - x) ** 2))
     assert measured == pytest.approx(10.0, abs=1.0)
+
+
+def test_noise_bank_stitches_short_beds_without_looping_one(tmp_path):
+    """Short harvested beds must not be repeated bit-for-bit across a clip."""
+    import soundfile as sf
+
+    rng_np = np.random.default_rng(0)
+    short = SR // 4                                       # 0.25 s, like the real bank
+    for index in range(8):
+        sf.write(tmp_path / f"noise_{index:05d}.wav",
+                 rng_np.standard_normal(short).astype(np.float32) * 0.05, SR)
+    bank = NoiseBank(tmp_path)
+
+    n = SR * 5
+    for seed in range(20):
+        bed = bank.sample(n, random.Random(seed))
+        assert len(bed) == n
+        # no lag that is a whole number of bed lengths repeats exactly
+        for lag in range(short, n, short):
+            assert not np.array_equal(bed[:n - lag], bed[lag:]), (seed, lag)
 
 
 def test_noise_bank_rejects_empty_dir(tmp_path):

@@ -75,6 +75,7 @@ class NoiseBank:
     """Real ATC noise beds (see `real_atc.export_noise_beds`) served as random crops."""
 
     def __init__(self, wav_dir: str | Path, sr: int = TARGET_SR):
+        self.sr = sr
         self.clips = []
         for path in sorted(Path(wav_dir).glob("*.wav")):
             wav, file_sr = sf.read(path, dtype="float32")
@@ -87,12 +88,27 @@ class NoiseBank:
         if not self.clips:
             raise ValueError(f"no noise-bed wavs in {wav_dir}")
 
-    def sample(self, n: int, rng: random.Random) -> np.ndarray:
-        clip = rng.choice(self.clips)
-        if len(clip) < n:
-            clip = np.tile(clip, n // len(clip) + 1)
-        start = rng.randrange(0, len(clip) - n + 1) if len(clip) > n else 0
-        return clip[start:start + n]
+    def sample(self, n: int, rng: random.Random, fade_ms: float = 5.0) -> np.ndarray:
+        """`n` samples of bed, stitched from as many random clips as it takes.
+
+        Harvested beds are short — the calibration bank's median is ~0.3 s —
+        so filling a several-second utterance from a single one would repeat it
+        bit for bit a dozen times and stamp a periodic pattern on the clip.
+        Successive clips are drawn independently and crossfaded over `fade_ms`,
+        which keeps the bed aperiodic and the joins inaudible.
+        """
+        fade = max(1, int(self.sr * fade_ms / 1000))
+        bed = np.zeros(0, dtype=np.float32)
+        while len(bed) < n:
+            clip = rng.choice(self.clips)
+            if len(bed) >= fade and len(clip) > fade:
+                ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+                join = bed[-fade:] * (1.0 - ramp) + clip[:fade] * ramp
+                bed = np.concatenate([bed[:-fade], join, clip[fade:]])
+            else:
+                bed = np.concatenate([bed, clip])
+        start = rng.randrange(0, len(bed) - n + 1) if len(bed) > n else 0
+        return bed[start:start + n]
 
 
 def narrowband_roundtrip(x: np.ndarray, sr: int, rng: random.Random,

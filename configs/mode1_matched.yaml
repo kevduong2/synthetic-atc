@@ -7,22 +7,37 @@
 # narrows" note: LP 2200-3000 Hz, SNR skewed clean, squelch_gate up to 0.8,
 # codec always-ish on (LiveATC-style delivery), bed_prob 0.8.
 #
-# `bed_prob` only bites once a noise-bed directory is wired in; until then
-# additive_noise falls back to synthetic pink/white and the value is inert.
+# `channel.noise.beds_dir` points at noise harvested from the calibration clips,
+# so bed_prob 0.8 means most clips carry the real receiver's own floor rather
+# than synthetic pink/white. That cut the LTAS L1 distance from 8.31 to 7.05 dB,
+# the single largest fidelity gain in this profile.
 #
 # Three rows are fitted rather than copied, because 03 §3 quotes *injected*
 # values while the acceptance test measures the Tier 1 estimator's read of them
-# (scripts/gen_profile_smoke.py; numbers from the 100-clip P2 run):
+# (scripts/gen_profile_smoke.py; numbers from the 200-clip P2 run):
 #
-#   snr_db        03 says 12-32. The estimator compares p90 to p15 frame power,
-#                 and inter-word pauses sit below the injected noise floor, so
-#                 it reads ~4 dB high: injecting 12-32 measures a median near 28
-#                 against a real median of 23.9. Injecting 8-30 with the same
-#                 clean skew measures 24.1. (12-32 does pass the p10-p90 test,
-#                 just 4 dB high, so this is a fit, not a fix.)
+#   snr_db        03 says 12-32; this injects 5-26 (median ~16 dB) with the same
+#                 clean skew and measures a median of 29.1 against a real 23.9 --
+#                 inside real's p10-p90 of [14.1, 36.6], but high in it.
+#
+#                 The gap is the estimator, not the audio. It compares p90 to
+#                 p15 frame power, so anything that makes the noise floor
+#                 non-stationary drops p15 and inflates the reading, and this
+#                 profile's two realism features both do that: the squelch gate
+#                 mutes the floor outside the transmission, and the stitched
+#                 harvested beds carry their own quiet stretches.
+#
+#                 It is deliberately not tuned further, because the reading
+#                 saturates: dropping the injected median from 16.1 to 12.1 dB
+#                 moves the measurement only 29.1 -> 27.2. Past this point p15
+#                 is set by the gated floor rather than by the injected noise,
+#                 so centring the median exactly would mean generating audio
+#                 several dB noisier than the real set to satisfy a statistic
+#                 that has stopped responding to it. That is metric-chasing, so
+#                 the fit stops at a defensible ~16 dB injected median.
 #   bandpass.high 03 says 2200-3000. The 98%-power edge lands well below the
 #                 filter corner, so the upper half of that range is what puts
-#                 the median at 2352 against a real 2406.
+#                 the median at 2359 against a real 2406.
 #   threshold_db  the gate's intra-speech half is what drives the SNR estimate,
 #                 not its floor depth: at -28..-18 it closes during ordinary
 #                 pauses on most clips and the median SNR reads 62. At -42..-30
@@ -69,6 +84,14 @@ dataset:
 channel:
   profile: matched
   clean_arm_prob: 0.03
+  noise:
+    # Noise harvested from the calibration clips themselves — the real receiver's
+    # own floor, which is the whole point of this profile. A run-machine path
+    # (runs/ is gitignored); regenerate with
+    #   uv run python -m atcgen.dataset.local_corpus data/real/calibration runs/calib_v1
+    # then the noise_harvest step. Unset it and additive_noise falls back to
+    # synthetic pink/white, which is what `wide` does.
+    beds_dir: runs/calib_v1/noise
   chain:
     # -- talker ------------------------------------------------------------
     - primitive: mic_coloration
@@ -113,7 +136,7 @@ channel:
       depth_db: {uniform: [2.0, 5.0]}
     - primitive: additive_noise
       prob: 1.0
-      snr_db: {beta_scaled: [2.0, 1.8, 8, 30]}
+      snr_db: {beta_scaled: [2.0, 1.8, 5, 26]}
       color: {choice: [white, pink, pink]}
       bed_prob: 0.8
     - primitive: hum

@@ -21,7 +21,7 @@ import numpy as np
 import soundfile as sf
 
 from atcgen.channel.chain import ProceduralChannel, UtteranceMeta
-from atcgen.channel.primitives import TARGET_SR, resample
+from atcgen.channel.primitives import TARGET_SR, NoiseBank, resample
 from atcgen.config import load_config
 from atcgen.eval.channel_stats import SCALAR_KEYS, compare, compute_stats
 from atcgen.text.sources import GrammarTextSource
@@ -75,7 +75,10 @@ def _voice_layer(config, cache_dir: Path, count: int, seed: int) -> list[dict]:
 def generate(config_path: str, out_dir: Path, count: int, seed: int,
              cache_dir: Path | None) -> Path:
     config = load_config(config_path)
-    channel = ProceduralChannel.from_config(config.channel)
+    beds_dir = config.channel.noise.beds_dir
+    noise_bank = NoiseBank(beds_dir) if beds_dir is not None else None
+    channel = ProceduralChannel.from_config(config.channel, noise_bank=noise_bank)
+    print(f"  noise beds: {beds_dir or 'none (synthetic pink/white only)'}")
     cache_dir = cache_dir or Path(f"runs/p2_smoke/tts_{config.channel.profile}")
     records = _voice_layer(config, cache_dir, count, seed)
     out_dir.mkdir(parents=True, exist_ok=True)
