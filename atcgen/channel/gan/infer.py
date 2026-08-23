@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..dsp import TARGET_SR, _resample
+from ..primitives import TARGET_SR, resample
 from .model import Generator, spec_to_wav, wav_to_spec
 
 
@@ -23,7 +23,7 @@ class GanChannel:
         """Clean wav (float32 mono at sr) -> radio-fied 16 kHz wav."""
         x = wav.astype(np.float32)
         if sr != TARGET_SR:
-            x = _resample(x, sr, TARGET_SR)
+            x = resample(x, sr, TARGET_SR)
         t = torch.from_numpy(x).to(self.device)
         spec, phase = wav_to_spec(t)
         frames = spec.shape[-1]

@@ -39,7 +39,7 @@ channel:
   chain:
     - primitive: narrowband_roundtrip
       prob: 1.0
-      sr: {choice: [6000, 8000, 8000, 11025]}
+      narrow_sr: {choice: [6000, 8000, 8000, 11025]}
     - primitive: bandpass
       prob: 1.0
       low: {uniform: [250, 400]}

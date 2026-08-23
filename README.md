@@ -90,7 +90,7 @@ WER uses ATC-aware normalization (`training/normalize.py`): digit expansion, `ni
 
 - `atcgen/text/` — phraseology grammar (FAA 7110.65/ICAO patterns) + pluggable text sources
 - `atcgen/tts/` — Kokoro TTS wrapper (voice/speed randomization; speed 1.15–1.55× for fast controller delivery)
-- `atcgen/channel/dsp.py` — parametric VHF channel: narrowband resample, 300–3400 Hz bandpass, AM distortion, AGC pumping, static at 3–25 dB SNR (or real noise beds), hum, crackle, squelch clicks, dropouts, heterodyne, co-channel interference, low-bitrate MP3 round-trip, pilot double-hop
+- `atcgen/channel/primitives.py` + `chain.py` — parametric VHF channel as a config-declared chain of per-effect primitives: narrowband resample, 300–3400 Hz bandpass, AM distortion, AGC pumping, static at 3–25 dB SNR (or real noise beds), hum, crackle, squelch clicks, dropouts, heterodyne, co-channel interference, low-bitrate MP3 round-trip, pilot double-hop
 - `atcgen/channel/gan/` — CycleGAN channel model (train on 5080, `--device cuda`)
 - `atcgen/dataset/` — dataset builder + real-corpus prep (`jacktol/atc-dataset`, `Jzuluaga/uwb_atcc`)
 - `training/` — Whisper fine-tune, WER eval, ATC text normalization

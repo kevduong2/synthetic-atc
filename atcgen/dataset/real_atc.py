@@ -57,7 +57,7 @@ def export_noise_beds(out_dir: str | Path, max_clips: int = 500,
 
     Takes the quietest `win_sec` window of each clip when it is clearly below
     the clip's overall level (i.e. between transmissions, not during speech).
-    Output feeds `atcgen.channel.dsp.NoiseBank`. Returns count written.
+    Output feeds `atcgen.channel.primitives.NoiseBank`. Returns count written.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

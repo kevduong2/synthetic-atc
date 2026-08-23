@@ -12,17 +12,19 @@ helper `load_manifest` below.
 
 import json
 import random
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 from tqdm import tqdm
 
-from ..channel.dsp import ChannelParams, NoiseBank, RadioChannelSim, TARGET_SR
+from ..channel.chain import ProceduralChannel, UtteranceMeta, mild_chain
+from ..channel.primitives import TARGET_SR, NoiseBank, resample
+from ..config import load_config
 from ..text.sources import TextSource, make_text_source
 
 PILOT_DOUBLE_HOP_PROB = 0.5   # pilot audio relayed through a ground station
+DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "mode1_default.yaml"
 
 
 def build_dataset(
@@ -47,12 +49,15 @@ def build_dataset(
     if tts is None:
         from ..tts import KokoroTTS
         tts = KokoroTTS()
-    sim = RadioChannelSim(noise_bank=NoiseBank(noise_dir) if noise_dir else None)
+    channel_cfg = load_config(DEFAULT_CONFIG).channel
+    sim = ProceduralChannel.from_config(
+        channel_cfg, noise_bank=NoiseBank(noise_dir) if noise_dir else None)
 
-    gan = None
+    gan = mild = None
     if channel in ("gan", "mix"):
         from ..channel.gan.infer import GanChannel
         gan = GanChannel(gan_checkpoint)
+        mild = ProceduralChannel(mild_chain())
 
     manifest_path = out / "manifest.jsonl"
     prev_wav = None  # reused as co-channel interference material
@@ -65,34 +70,34 @@ def build_dataset(
             # noise-only sample with empty transcript (anti-hallucination)
             if channel != "clean" and rng.random() < noise_only_frac:
                 silence = np.zeros(int(TARGET_SR * rng.uniform(2.0, 6.0)), np.float32)
-                wav, params = sim(silence, TARGET_SR, rng)
+                wav, rec = sim(silence, TARGET_SR, rng, UtteranceMeta(kind="noise"))
                 rel = f"wavs/{i:06d}.wav"
                 sf.write(out / rel, wav, TARGET_SR)
                 mf.write(json.dumps({
                     "audio": rel, "text": "", "role": "none", "kind": "noise",
                     "channel": "dsp", "duration": round(len(wav) / TARGET_SR, 3),
-                    "snr_db": round(params.snr_db, 1),
+                    "snr_db": rec.snr_db,
                 }) + "\n")
                 continue
 
             utt = text_source.sample(rng)
             clean = tts.synthesize(utt.spoken, rng)
 
+            utt_meta = UtteranceMeta(role=utt.role, kind=utt.kind)
             meta = {}
             if mode == "clean":
-                from ..channel.dsp import _resample
-                wav = _resample(clean, tts.sample_rate, TARGET_SR)
+                wav = resample(clean, tts.sample_rate, TARGET_SR)
             elif mode == "gan":
                 wav = gan(clean, tts.sample_rate, rng)
                 # GAN alone is deterministic (one learned radio); a mild DSP
                 # pass restores per-sample SNR/band/codec diversity
-                wav, params = sim(wav, TARGET_SR, rng, params=ChannelParams.mild(rng))
-                meta = {"snr_db": round(params.snr_db, 1)}
+                wav, rec = mild(wav, TARGET_SR, rng, utt_meta)
+                meta = {"snr_db": rec.snr_db}
             else:
                 hops = 2 if utt.role == "pilot" and rng.random() < PILOT_DOUBLE_HOP_PROB else 1
-                wav, params = sim(clean, tts.sample_rate, rng,
-                                  interference=prev_wav, hops=hops)
-                meta = {"snr_db": round(params.snr_db, 1), "hops": hops}
+                wav, rec = sim(clean, tts.sample_rate, rng, utt_meta,
+                               interference=prev_wav, hops=hops)
+                meta = {"snr_db": rec.snr_db, "hops": hops}
 
             rel = f"wavs/{i:06d}.wav"
             sf.write(out / rel, wav, TARGET_SR)
