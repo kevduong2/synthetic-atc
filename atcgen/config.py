@@ -162,6 +162,28 @@ class DatasetConfig:
 
 
 @dataclass
+class QCConfig:
+    """Tier 0 gate settings (05 §2), mirrored onto `atcgen.eval.qc.QCConfig`.
+
+    ``asr_roundtrip`` is off by default: the gate loads a pretrained Whisper,
+    which is far too heavy for a routine generation run.  Turn it on for
+    release-candidate sets, where discarding ~a third of the samples is the
+    point.  ``max_retries`` regenerations are attempted before a failing
+    sample is kept with `gen.qc.ok = false`.
+    """
+
+    enabled: bool = True
+    max_retries: int = 3
+    asr_roundtrip: bool = False
+    min_duration: float = 0.5
+    max_duration: float = 30.0
+    max_clip_frac: float = 0.01
+    min_rms_db: float = -40.0
+    max_rms_db: float = -8.0
+    max_wer: float = 0.5
+
+
+@dataclass
 class ChainStep:
     primitive: str
     prob: float
@@ -253,6 +275,7 @@ class GeneratorConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     voice_augment: VoiceAugmentConfig = field(default_factory=VoiceAugmentConfig)
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    qc: QCConfig = field(default_factory=QCConfig)
     channel: ChannelConfig | None = field(default_factory=ChannelConfig)
     calibrated: CalibratedConfig | None = None
     backends: list[BackendConfig] = field(default_factory=list)
@@ -317,6 +340,32 @@ def _parse_dataset(value: Any, path: str) -> DatasetConfig:
                      f"{path}.pilot_double_hop_prob"),
         _quota_map(data.get("category_quotas", {}), f"{path}.category_quotas"),
     )
+
+
+def _parse_qc(value: Any, path: str) -> QCConfig:
+    data = _mapping(value, path)
+    default = QCConfig()
+    names = {item.name for item in fields(QCConfig)}
+    _reject_unknown(data, names, path)
+    kwargs: dict[str, Any] = {}
+    for name in names:
+        item = data.get(name, getattr(default, name))
+        if name in {"enabled", "asr_roundtrip"}:
+            if not isinstance(item, bool):
+                raise ValueError(f"{path}.{name} must be a boolean")
+        elif name == "max_retries":
+            if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+                raise ValueError(f"{path}.max_retries must be a non-negative integer")
+        elif name in {"max_clip_frac", "max_wer"}:
+            item = _probability(item, f"{path}.{name}")
+        else:
+            item = _number(item, f"{path}.{name}")
+        kwargs[name] = item
+    if kwargs["min_duration"] > kwargs["max_duration"]:
+        raise ValueError(f"{path}.min_duration exceeds max_duration")
+    if kwargs["min_rms_db"] > kwargs["max_rms_db"]:
+        raise ValueError(f"{path}.min_rms_db exceeds max_rms_db")
+    return QCConfig(**kwargs)
 
 
 def _parse_channel(value: Any, path: str) -> ChannelConfig:
@@ -494,7 +543,7 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Ge
     if overrides:
         _apply_overrides(data, overrides)
 
-    names = {"mode", "seed", "output", "tts", "voice_augment", "dataset",
+    names = {"mode", "seed", "output", "tts", "voice_augment", "dataset", "qc",
              "channel", "calibrated", "backends"}
     _reject_unknown(data, names, "")
     mode = data.get("mode", "procedural")
@@ -539,6 +588,7 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Ge
         tts=_parse_tts(data.get("tts", {}), "tts"),
         voice_augment=_parse_voice_augment(data.get("voice_augment", {}), "voice_augment"),
         dataset=_parse_dataset(data.get("dataset", {}), "dataset"),
+        qc=_parse_qc(data.get("qc", {}), "qc"),
         channel=channel,
         calibrated=calibrated,
         backends=backends,

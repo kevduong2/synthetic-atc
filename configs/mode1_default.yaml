@@ -33,6 +33,20 @@ dataset:
   pilot_double_hop_prob: 0.5
   category_quotas: {}
 
+# Tier 0 gates run inside generation. asr_roundtrip stays off here: it loads a
+# pretrained Whisper per run, which is too heavy for routine generation --
+# turn it on for release-candidate sets.
+qc:
+  enabled: true
+  max_retries: 3
+  asr_roundtrip: false
+  min_duration: 0.5
+  max_duration: 30.0
+  max_clip_frac: 0.01
+  min_rms_db: -40.0
+  max_rms_db: -8.0
+  max_wer: 0.5
+
 channel:
   profile: default
   clean_arm_prob: 0.0

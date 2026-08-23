@@ -90,6 +90,42 @@ def test_mix_mode_backends_parse(tmp_path):
     ]
 
 
+def test_qc_defaults_keep_the_asr_gate_off(tmp_path):
+    path = tmp_path / "plain.yaml"
+    path.write_text("mode: procedural\n")
+    qc = load_config(path).qc
+    assert qc.enabled is True
+    assert qc.asr_roundtrip is False        # loading Whisper per run is opt-in
+    assert qc.max_retries == 3
+    assert (qc.min_duration, qc.max_duration) == (0.5, 30.0)
+
+
+def test_qc_section_parses_and_validates(tmp_path):
+    path = tmp_path / "qc.yaml"
+    path.write_text("mode: procedural\n"
+                    "qc: {enabled: true, asr_roundtrip: true, max_retries: 1, "
+                    "min_duration: 1.0, max_duration: 12.0, max_clip_frac: 0.02, "
+                    "min_rms_db: -35, max_rms_db: -10, max_wer: 0.35}\n")
+    qc = load_config(path).qc
+    assert (qc.asr_roundtrip, qc.max_retries, qc.max_wer) == (True, 1, 0.35)
+    assert (qc.min_rms_db, qc.max_rms_db) == (-35.0, -10.0)
+
+
+@pytest.mark.parametrize("body,message", [
+    ("qc: {asr_roundtrip: yes_please}", r"qc\.asr_roundtrip"),
+    ("qc: {max_retries: -1}", r"qc\.max_retries"),
+    ("qc: {max_wer: 2.0}", r"qc\.max_wer"),
+    ("qc: {min_duration: 9.0, max_duration: 2.0}", r"qc\.min_duration"),
+    ("qc: {min_rms_db: -3, max_rms_db: -20}", r"qc\.min_rms_db"),
+    ("qc: {asr_gate: true}", r"qc\.asr_gate"),
+])
+def test_bad_qc_sections_raise(tmp_path, body, message):
+    path = tmp_path / "bad_qc.yaml"
+    path.write_text(f"mode: procedural\n{body}\n")
+    with pytest.raises(ValueError, match=message):
+        load_config(path)
+
+
 def test_calibrated_body_parses(tmp_path):
     path = tmp_path / "mode2.yaml"
     path.write_text(

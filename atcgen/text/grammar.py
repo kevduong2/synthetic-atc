@@ -18,6 +18,8 @@ class Utterance:
     role: str  # "controller" | "pilot"
     kind: str
     meta: dict = field(default_factory=dict)
+    weight: float = 1.0        # relative sampling weight within its category
+    category: str = "routine"  # "routine" | "emergency" | "rare_vocab" | ...
 
 
 def _utt(spoken: str, role: str, kind: str, **meta) -> Utterance:
