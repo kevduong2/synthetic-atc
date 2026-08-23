@@ -1,0 +1,150 @@
+# Mode 1 `matched` profile: distributions centred on the measured local
+# calibration set (01 §2), rather than on the widest defensible range.
+#
+# This is the fair DSP baseline for Mode 2 comparisons and the profile to use
+# when targeting our own receiver chain. Structurally identical to `wide` — the
+# same chain in the same order — with the ranges narrowed per 03 §3's "matched
+# narrows" note: LP 2200-3000 Hz, SNR skewed clean, squelch_gate up to 0.8,
+# codec always-ish on (LiveATC-style delivery), bed_prob 0.8.
+#
+# `bed_prob` only bites once a noise-bed directory is wired in; until then
+# additive_noise falls back to synthetic pink/white and the value is inert.
+#
+# Three rows are fitted rather than copied, because 03 §3 quotes *injected*
+# values while the acceptance test measures the Tier 1 estimator's read of them
+# (scripts/gen_profile_smoke.py; numbers from the 100-clip P2 run):
+#
+#   snr_db        03 says 12-32. The estimator compares p90 to p15 frame power,
+#                 and inter-word pauses sit below the injected noise floor, so
+#                 it reads ~4 dB high: injecting 12-32 measures a median near 28
+#                 against a real median of 23.9. Injecting 8-30 with the same
+#                 clean skew measures 24.1. (12-32 does pass the p10-p90 test,
+#                 just 4 dB high, so this is a fit, not a fix.)
+#   bandpass.high 03 says 2200-3000. The 98%-power edge lands well below the
+#                 filter corner, so the upper half of that range is what puts
+#                 the median at 2352 against a real 2406.
+#   threshold_db  the gate's intra-speech half is what drives the SNR estimate,
+#                 not its floor depth: at -28..-18 it closes during ordinary
+#                 pauses on most clips and the median SNR reads 62. At -42..-30
+#                 only genuine silence closes, and the handful of clips that do
+#                 gate hard reproduce real's >60 dB outlier tail (01 §2 reports
+#                 those as "a few clips", not the norm). Floor depth barely
+#                 moves any statistic once the threshold is conservative.
+
+mode: procedural
+seed: 0
+
+output:
+  sample_rate: 16000
+  format: wav
+  loudness_db: {uniform: [-25, -20]}
+
+tts:
+  voices:
+    - af_heart
+    - af_bella
+    - af_nicole
+    - af_sarah
+    - af_sky
+    - am_adam
+    - am_michael
+    - am_eric
+    - am_onyx
+    - bf_emma
+    - bf_isabella
+    - bm_george
+    - bm_lewis
+  speed: {uniform: [1.0, 1.4]}
+
+voice_augment:
+  pitch_semitones: {prob: 0.5, uniform: [-2, 2]}
+  tempo: {prob: 0.3, uniform: [0.95, 1.05]}   # narrower than wide's, see that file
+  eq_tilt_db: {prob: 0.4, uniform: [-2, 2]}
+
+dataset:
+  noise_only_frac: 0.03
+  pilot_double_hop_prob: 0.5
+  category_quotas: {}
+
+channel:
+  profile: matched
+  clean_arm_prob: 0.03
+  chain:
+    # -- talker ------------------------------------------------------------
+    - primitive: mic_coloration
+      prob: 0.5
+      tilt_db: {uniform: [-3, 3]}
+      peaks: {choice: [1, 2]}
+      peak_gain_db: 4.0
+    - primitive: ptt_truncation
+      prob: 0.2
+      head_ms: {prob: 0.6, uniform: [20, 100]}
+      tail_ms: {prob: 0.6, uniform: [20, 100]}
+
+    # -- transmitter / path ------------------------------------------------
+    - primitive: narrowband_roundtrip
+      prob: 0.9
+      narrow_sr: {choice: [6000, 8000, 8000]}
+    - primitive: resample_chain
+      prob: 0.05
+      narrow_sr: {choice: [5000, 6000]}
+    - primitive: bandpass
+      prob: 1.0
+      low: {uniform: [200, 320]}
+      high: {uniform: [2500, 3000]}
+    - primitive: agc_wander
+      prob: 0.6
+      strength: {uniform: [0.0, 0.4]}
+    - primitive: am_distortion
+      prob: 1.0
+      depth: {uniform: [0.0, 0.15]}
+    - primitive: soft_clip
+      prob: 1.0
+      drive: {uniform: [1.0, 2.5]}
+    - primitive: dropouts
+      prob: 0.15
+      dropout_prob: 1.0
+      count_lam: 1.0
+      min_ms: 10.0
+      max_ms: 40.0
+    - primitive: fading
+      prob: 0.1
+      rate_hz: {uniform: [0.2, 1.5]}
+      depth_db: {uniform: [2.0, 5.0]}
+    - primitive: additive_noise
+      prob: 1.0
+      snr_db: {beta_scaled: [2.0, 1.8, 8, 30]}
+      color: {choice: [white, pink, pink]}
+      bed_prob: 0.8
+    - primitive: hum
+      prob: 0.25
+      amp: {uniform: [0.002, 0.008]}
+    - primitive: crackle
+      prob: 0.5
+      rate: {uniform: [0.0, 4.0]}
+    - primitive: heterodyne
+      prob: 0.05
+      f_low: 300.0
+      f_high: 2000.0
+
+    # -- receiving station -------------------------------------------------
+    - primitive: cochannel_mix
+      prob: 0.08
+      level: {uniform: [0.05, 0.15]}
+    - primitive: agc_attack
+      prob: 0.5
+      attack_ms: {uniform: [50, 200]}
+      surge_db: {uniform: [3, 6]}
+    - primitive: squelch_gate
+      prob: 0.8
+      floor_db: {uniform: [-50, -20]}
+      attack_ms: {uniform: [5, 40]}
+      release_ms: {uniform: [10, 50]}
+      threshold_db: {uniform: [-42, -30]}
+      tail_burst_prob: 0.3
+    - primitive: squelch_clicks
+      prob: 0.8
+    - primitive: codec_roundtrip
+      prob: 0.8
+      bitrate_kbps: {choice: [23, 32, 32, 64]}
+  shuffle_groups: []

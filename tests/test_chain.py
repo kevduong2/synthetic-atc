@@ -190,6 +190,39 @@ def test_shuffle_groups_reorder_within_the_group():
     assert len(orders) > 1
 
 
+@pytest.mark.parametrize("profile", ["wide", "matched"])
+def test_profile_configs_build_a_working_chain(profile):
+    """The P2 profiles stay loadable and runnable; their *statistics* are
+    checked by scripts/gen_profile_smoke.py, which needs TTS and is not a test."""
+    cfg = load_config(f"configs/mode1_{profile}.yaml").channel
+    assert cfg.profile == profile
+    sim = ProceduralChannel.from_config(cfg)
+    for seed in range(5):
+        wav, rec = sim(_tone(sec=2.0), 24000, random.Random(seed),
+                       UtteranceMeta(role="pilot"), hops=2)
+        assert np.isfinite(wav).all() and np.abs(wav).max() <= 1.0
+        assert len(wav) == pytest.approx(TARGET_SR * (2 + 2 * PAD_SEC), abs=50)
+        if not rec.clean_arm:
+            assert "bandpass" in rec.applied()
+
+
+def test_matched_profile_is_a_narrowing_of_wide():
+    """Every shared numeric range in `matched` sits inside `wide`'s."""
+    def ranges(profile):
+        out = {}
+        for step in load_config(f"configs/mode1_{profile}.yaml").channel.chain:
+            for name, spec in step.params.items():
+                if spec.kind in {"uniform", "beta_scaled"}:
+                    bounds = spec.value[-2:]
+                    out.setdefault((step.primitive, name), bounds)
+        return out
+
+    wide, matched = ranges("wide"), ranges("matched")
+    for key, (low, high) in matched.items():
+        if key in wide:
+            assert wide[key][0] <= low and high <= wide[key][1], key
+
+
 def test_unknown_primitive_rejected():
     with pytest.raises(ValueError, match="unknown channel primitive"):
         ProceduralChannel([_step("teleporter")])

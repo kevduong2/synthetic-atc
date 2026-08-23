@@ -1,0 +1,142 @@
+# Mode 1 `wide` profile: domain randomization, not domain imitation.
+#
+# Ranges sit at the union of the literature values and our local measurements,
+# so an unknown receiver looks like just another draw (03 §1). Every row of the
+# 03 §3 parameter table appears here; nothing is a code constant.
+#
+# Chain order is the physical signal path. mic_coloration and ptt_truncation are
+# SOURCE_ONCE (the talker's handset, the moment they keyed the mic — once, no
+# matter how many radios relay it); everything through heterodyne is
+# transmit/path-side and repeats per hop; cochannel_mix onward is RECEIVER_END
+# (the co-channel sum arriving at the antenna, then AGC, squelch, gate artifacts
+# and the delivery codec).
+
+mode: procedural
+seed: 0
+
+output:
+  sample_rate: 16000
+  format: wav
+  loudness_db: {uniform: [-25, -18]}
+
+tts:
+  voices:
+    - af_heart
+    - af_bella
+    - af_nicole
+    - af_sarah
+    - af_sky
+    - am_adam
+    - am_michael
+    - am_eric
+    - am_onyx
+    - bf_emma
+    - bf_isabella
+    - bm_george
+    - bm_lewis
+  # 03 §4 says keep/extend 0.95-1.55x; `wide` takes the extend option.
+  speed: {uniform: [0.9, 1.6]}
+
+# The voice layer is P3's stage and nothing consumes it yet. It is set wide
+# here deliberately: `duration` and `mod_4hz` are the two reported statistics
+# the channel cannot move (the chain is length-preserving by construction, and
+# it narrows syllable-rate modulation rather than widening it), so those two
+# spreads are the voice layer's to own once P3 lands.
+voice_augment:
+  pitch_semitones: {prob: 0.5, uniform: [-2, 2]}
+  tempo: {prob: 0.5, uniform: [0.85, 1.15]}
+  eq_tilt_db: {prob: 0.4, uniform: [-3, 3]}
+
+dataset:
+  noise_only_frac: 0.03
+  pilot_double_hop_prob: 0.5
+  category_quotas: {}
+
+channel:
+  profile: wide
+  clean_arm_prob: 0.07
+  chain:
+    # -- talker ------------------------------------------------------------
+    - primitive: mic_coloration
+      prob: 0.5
+      tilt_db: {uniform: [-4, 4]}
+      peaks: {choice: [1, 2]}
+      peak_gain_db: 6.0
+    - primitive: ptt_truncation
+      prob: 0.25
+      head_ms: {prob: 0.6, uniform: [20, 120]}
+      tail_ms: {prob: 0.6, uniform: [20, 120]}
+
+    # -- transmitter / path ------------------------------------------------
+    - primitive: narrowband_roundtrip
+      prob: 0.8
+      narrow_sr: {choice: [6000, 8000, 8000, 11025]}
+    - primitive: resample_chain          # the 03 §3 "extra 4-6k arm", p=0.1
+      prob: 0.1
+      narrow_sr: {choice: [4000, 5000, 6000]}
+    - primitive: bandpass
+      prob: 1.0
+      low: {uniform: [200, 400]}
+      high: {uniform: [2300, 3600]}
+    - primitive: agc_wander
+      prob: 0.6
+      strength: {uniform: [0.0, 0.6]}
+    - primitive: am_distortion
+      prob: 1.0
+      depth: {uniform: [0.0, 0.25]}
+    - primitive: soft_clip
+      prob: 1.0
+      drive: {uniform: [1.0, 4.0]}
+    - primitive: soft_clip                # 03 §3's hard-clip arm, p=0.05
+      prob: 0.05
+      drive: {uniform: [8.0, 20.0]}
+    - primitive: dropouts
+      prob: 0.2
+      dropout_prob: 1.0
+      count_lam: 1.5
+      min_ms: 10.0
+      max_ms: 50.0
+    - primitive: fading
+      prob: 0.15
+      rate_hz: {uniform: [0.2, 2.0]}
+      depth_db: {uniform: [2.0, 6.0]}
+    - primitive: additive_noise
+      prob: 1.0
+      snr_db: {beta_scaled: [2.0, 1.2, 0, 30]}
+      color: {choice: [white, pink, pink]}
+      bed_prob: 0.6
+    - primitive: hum
+      prob: 0.3
+      amp: {uniform: [0.002, 0.01]}
+    - primitive: crackle
+      prob: 0.6
+      rate: {uniform: [0.0, 6.0]}
+    - primitive: heterodyne
+      prob: 0.08
+      f_low: 300.0
+      f_high: 2000.0
+
+    # -- receiving station -------------------------------------------------
+    - primitive: cochannel_mix
+      prob: 0.1
+      level: {uniform: [0.05, 0.2]}
+    - primitive: agc_attack
+      prob: 0.5
+      attack_ms: {uniform: [50, 200]}
+      surge_db: {uniform: [3, 8]}
+    - primitive: squelch_gate
+      prob: 0.6
+      floor_db: {uniform: [-60, -20]}
+      attack_ms: {uniform: [5, 50]}
+      release_ms: {uniform: [5, 50]}
+      # spans matched's -42..-30 as well: below about -30 only genuine
+      # silence closes the gate, above it ordinary pauses do too, and
+      # `wide` wants both regimes (03 §1 puts wide at the union).
+      threshold_db: {uniform: [-42, -15]}
+      tail_burst_prob: 0.3
+    - primitive: squelch_clicks
+      prob: 0.8
+    - primitive: codec_roundtrip
+      prob: 0.6
+      bitrate_kbps: {choice: [16, 23, 32, 64]}
+  shuffle_groups: []
