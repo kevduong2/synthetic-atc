@@ -1,0 +1,79 @@
+mode: procedural
+seed: 0
+
+output:
+  sample_rate: 16000
+  format: wav
+  loudness_db: {uniform: [-23, -17]}
+
+tts:
+  voices:
+    - af_heart
+    - af_bella
+    - af_nicole
+    - af_sarah
+    - af_sky
+    - am_adam
+    - am_michael
+    - am_eric
+    - am_onyx
+    - bf_emma
+    - bf_isabella
+    - bm_george
+    - bm_lewis
+  speed: {uniform: [0.95, 1.55]}
+
+voice_augment:
+  pitch_semitones: {prob: 0.5, uniform: [-2, 2]}
+  tempo: {prob: 0.3, uniform: [0.9, 1.1]}
+  eq_tilt_db: {prob: 0.4, uniform: [-3, 3]}
+
+dataset:
+  noise_only_frac: 0.03
+  pilot_double_hop_prob: 0.5
+  category_quotas: {}
+
+channel:
+  profile: default
+  clean_arm_prob: 0.0
+  chain:
+    - primitive: narrowband_roundtrip
+      prob: 1.0
+      sr: {choice: [6000, 8000, 8000, 11025]}
+    - primitive: bandpass
+      prob: 1.0
+      low: {uniform: [250, 400]}
+      high: {uniform: [2800, 3600]}
+    - primitive: agc_wander
+      prob: 1.0
+      strength: {uniform: [0.0, 0.6]}
+    - primitive: am_distortion
+      prob: 1.0
+      depth: {uniform: [0.0, 0.25]}
+    - primitive: soft_clip
+      prob: 1.0
+      drive: {uniform: [1.0, 4.0]}
+    - primitive: dropouts
+      prob: 1.0
+      dropout_prob: {uniform: [0.0, 0.3]}
+    - primitive: additive_noise
+      prob: 1.0
+      snr_db: {uniform: [3, 25]}
+      color: {choice: [white, pink, pink]}
+    - primitive: hum
+      prob: 0.3
+      amp: {uniform: [0.002, 0.01]}
+    - primitive: crackle
+      prob: 1.0
+      rate: {uniform: [0.0, 6.0]}
+    - primitive: heterodyne
+      prob: 0.08
+    - primitive: squelch_clicks
+      prob: 0.8
+    - primitive: cochannel_mix
+      prob: 0.1
+      level: {uniform: [0.05, 0.2]}
+    - primitive: codec_roundtrip
+      prob: 0.5
+      compression_level: {uniform: [0.75, 0.95]}
+  shuffle_groups: []
