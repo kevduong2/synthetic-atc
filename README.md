@@ -24,9 +24,19 @@ uv run pytest                        # 21 tests
 # generate a listenable sample set (DSP channel)
 uv run python scripts/generate_dataset.py --out data/smoke --n-samples 10
 
+# harvest real noise beds once (static/carrier hiss between transmissions)
+uv run python -c "from atcgen.dataset.real_atc import export_noise_beds; \
+    print(export_noise_beds('data/noise_beds'))"
+
 # generate a training set (~10-20h ≈ 8k-16k samples)
-uv run python scripts/generate_dataset.py --out data/train_v1 --n-samples 10000
+uv run python scripts/generate_dataset.py --out data/train_v1 --n-samples 10000 \
+    --noise-dir data/noise_beds
 ```
+
+Channel realism knobs baked into generation: low-bitrate MP3 codec round-trip
+(matches LiveATC/ATCO2 delivery), real ATC noise beds via `--noise-dir`, ~3%
+noise-only samples with empty transcripts (Whisper hallucination control,
+`--noise-only-frac`), and a probabilistic double radio hop for pilot utterances.
 
 ### Bring your own transcripts
 
@@ -57,7 +67,7 @@ uv run python scripts/generate_dataset.py --out data/train_gan --n-samples 10000
     --channel gan --gan-checkpoint runs/cyclegan/G_ab_latest.pt
 ```
 
-The GAN operates on log-magnitude STFTs and reuses source phase at inference — no vocoder needed; it learns spectral coloration/band-limiting/noise floor from real ATCO2/UWB-ATCC audio.
+The GAN operates on log-magnitude STFTs and reuses source phase at inference — no vocoder needed; it learns spectral coloration/band-limiting/noise floor from real ATCO2/UWB-ATCC audio. Because the learned channel is deterministic (one "radio"), GAN samples also get a mild randomized DSP pass (SNR/band/codec) for per-sample diversity.
 
 ## Fine-tune + evaluate Whisper
 
@@ -65,8 +75,9 @@ The GAN operates on log-magnitude STFTs and reuses source phase at inference —
 # baseline WER on real ATC test data
 uv run python training/evaluate.py --model openai/whisper-small.en --dataset real
 
-# fine-tune on synthetic (add --mix-real to blend in real train data)
-uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl \
+# fine-tune; --mix-real is recommended (real data upsampled to ~1:1 with synthetic —
+# the ratio the synthetic-ATC literature found optimal; synthetic-only underperforms)
+uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl --mix-real \
     --model openai/whisper-small.en --out runs/whisper_atc --epochs 3 --batch-size 16 --fp16
 
 # WER after fine-tuning
@@ -79,7 +90,7 @@ WER uses ATC-aware normalization (`training/normalize.py`): digit expansion, `ni
 
 - `atcgen/text/` — phraseology grammar (FAA 7110.65/ICAO patterns) + pluggable text sources
 - `atcgen/tts/` — Kokoro TTS wrapper (voice/speed randomization; speed 1.15–1.55× for fast controller delivery)
-- `atcgen/channel/dsp.py` — parametric VHF channel: narrowband resample, 300–3400 Hz bandpass, AM distortion, AGC pumping, static at 3–25 dB SNR, hum, crackle, squelch clicks, dropouts, heterodyne, co-channel interference
+- `atcgen/channel/dsp.py` — parametric VHF channel: narrowband resample, 300–3400 Hz bandpass, AM distortion, AGC pumping, static at 3–25 dB SNR (or real noise beds), hum, crackle, squelch clicks, dropouts, heterodyne, co-channel interference, low-bitrate MP3 round-trip, pilot double-hop
 - `atcgen/channel/gan/` — CycleGAN channel model (train on 5080, `--device cuda`)
 - `atcgen/dataset/` — dataset builder + real-corpus prep (`jacktol/atc-dataset`, `Jzuluaga/uwb_atcc`)
 - `training/` — Whisper fine-tune, WER eval, ATC text normalization

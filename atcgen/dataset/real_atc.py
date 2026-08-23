@@ -48,3 +48,36 @@ def export_gan_domain_audio(out_dir: str | Path, max_clips: int = 2000,
         if n >= max_clips:
             break
     return n
+
+
+def export_noise_beds(out_dir: str | Path, max_clips: int = 500,
+                      corpus: str = "jacktol/atc-dataset", split: str = "train",
+                      win_sec: float = 0.6) -> int:
+    """Harvest speech-free noise beds (static/carrier hiss) from real ATC clips.
+
+    Takes the quietest `win_sec` window of each clip when it is clearly below
+    the clip's overall level (i.e. between transmissions, not during speech).
+    Output feeds `atcgen.channel.dsp.NoiseBank`. Returns count written.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    ds = load_real_atc(split=split, corpus=corpus)
+    win = int(REAL_SR * win_sec)
+    n = 0
+    for ex in ds:
+        wav = np.asarray(ex["audio"]["array"], dtype=np.float32)
+        if len(wav) < 2 * win:
+            continue
+        clip_rms = float(np.sqrt(np.mean(wav ** 2)))
+        # rolling mean power over win-sized windows
+        power = np.convolve(wav ** 2, np.ones(win) / win, mode="valid")
+        start = int(np.argmin(power))
+        bed_rms = float(np.sqrt(power[start]))
+        # quiet relative to speech, but not digital silence
+        if not (0.02 * clip_rms < bed_rms < 0.35 * clip_rms):
+            continue
+        sf.write(out / f"noise_{n:05d}.wav", wav[start:start + win], REAL_SR)
+        n += 1
+        if n >= max_clips:
+            break
+    return n

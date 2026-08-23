@@ -3,7 +3,7 @@
 
 Small validation run on the Mac:
   uv run python training/finetune_whisper.py --manifest data/smoke/manifest.jsonl \\
-      --model openai/whisper-tiny.en --out runs/whisper_smoke --max-steps 5
+      --model openai/whisper-tiny.en --out runs/whisper_smoke --max-steps 5 --eval-set holdout
 
 Real run on the 5080:
   uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl \\
@@ -46,7 +46,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--manifest", required=True, help="synthetic manifest.jsonl")
     ap.add_argument("--mix-real", action="store_true",
-                    help="also mix in the real ATC train split (jacktol/atc-dataset)")
+                    help="mix in the real ATC train split (jacktol/atc-dataset), upsampled "
+                         "to ~1:1 with synthetic (recommended; synthetic-only underperforms)")
+    ap.add_argument("--eval-set", choices=["real", "holdout"], default="real",
+                    help="'real' = real ATC test split (default); 'holdout' = slice of the "
+                         "synthetic set (offline, but only measures synthetic fit)")
+    ap.add_argument("--eval-samples", type=int, default=200,
+                    help="max real eval samples when --eval-set real")
     ap.add_argument("--model", default="openai/whisper-small.en")
     ap.add_argument("--out", required=True)
     ap.add_argument("--epochs", type=int, default=3)
@@ -66,9 +72,12 @@ def main():
     ds = load_manifest(args.manifest)
     if args.mix_real:
         from datasets import concatenate_datasets
-        real = load_real_atc(split="train")
-        ds = concatenate_datasets([ds.select_columns(["audio", "text"]),
-                                   real.select_columns(["audio", "text"])])
+        real = load_real_atc(split="train").select_columns(["audio", "text"])
+        # upsample real to ~1:1 with synthetic — the ratio the synthetic-ATC
+        # literature found optimal; beyond ~2:1 synthetic hurts
+        reps = max(1, round(len(ds) / len(real)))
+        ds = concatenate_datasets([ds.select_columns(["audio", "text"])] + [real] * reps)
+        ds = ds.shuffle(seed=0)
 
     def prepare(ex):
         audio = ex["audio"]
@@ -79,7 +88,15 @@ def main():
         return ex
 
     ds = ds.map(prepare, remove_columns=ds.column_names, desc="extracting features")
-    split = ds.train_test_split(test_size=max(args.eval_holdout, 1 / max(len(ds), 2)), seed=0)
+    if args.eval_set == "real":
+        train_ds = ds
+        eval_raw = load_real_atc(split="test")
+        eval_raw = eval_raw.select(range(min(args.eval_samples, len(eval_raw))))
+        eval_ds = eval_raw.map(prepare, remove_columns=eval_raw.column_names,
+                               desc="extracting eval features")
+    else:
+        split = ds.train_test_split(test_size=max(args.eval_holdout, 1 / max(len(ds), 2)), seed=0)
+        train_ds, eval_ds = split["train"], split["test"]
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.out,
@@ -100,8 +117,8 @@ def main():
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
-        train_dataset=split["train"],
-        eval_dataset=split["test"],
+        train_dataset=train_ds,
+        eval_dataset=eval_ds,
         data_collator=Collator(processor),
     )
     trainer.train()

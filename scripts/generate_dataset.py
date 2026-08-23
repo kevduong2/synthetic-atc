@@ -22,6 +22,11 @@ def main():
     ap.add_argument("--text", default="grammar",
                     help="'grammar' for built-in phraseology generator, or path to a JSONL file "
                          "of {'spoken':..., 'transcript':...} records from any external script")
+    ap.add_argument("--noise-dir", default=None,
+                    help="folder of real noise-bed wavs (atcgen.dataset.real_atc.export_noise_beds); "
+                         "mixed in instead of synthetic static ~60%% of the time")
+    ap.add_argument("--noise-only-frac", type=float, default=0.03,
+                    help="fraction of noise-only samples with empty transcript")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -35,6 +40,8 @@ def main():
         channel=args.channel,
         gan_checkpoint=args.gan_checkpoint,
         seed=args.seed,
+        noise_dir=args.noise_dir,
+        noise_only_frac=args.noise_only_frac,
     )
     print(f"wrote {manifest}")
 

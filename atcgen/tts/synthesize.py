@@ -32,7 +32,7 @@ KOKORO_VOICES = [
 class KokoroTTS:
     sample_rate = SAMPLE_RATE
 
-    def __init__(self, voices: list[str] | None = None, speed_range: tuple[float, float] = (1.15, 1.55)):
+    def __init__(self, voices: list[str] | None = None, speed_range: tuple[float, float] = (0.95, 1.55)):
         from kokoro import KPipeline
         # lang_code 'a' = American English; British voices still render.
         self.pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M")

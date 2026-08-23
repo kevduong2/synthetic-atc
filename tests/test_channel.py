@@ -49,6 +49,7 @@ def test_bandpass_removes_out_of_band_energy():
     p.hum_amp = 0.0
     p.heterodyne = False
     p.dropout_prob = 0.0
+    p.codec_level = 0.0
     low, _ = sim(_tone(f=100), 24000, random.Random(4), params=p)   # below band
     mid, _ = sim(_tone(f=1000), 24000, random.Random(4), params=p)  # in band
     assert np.mean(mid**2) > 10 * np.mean(low**2)
@@ -61,3 +62,48 @@ def test_interference_mixed_in():
     interference = np.random.default_rng(0).standard_normal(TARGET_SR).astype(np.float32) * 0.3
     wav, _ = sim(_tone(), 24000, random.Random(5), params=p, interference=interference)
     assert np.isfinite(wav).all()
+
+
+def test_codec_roundtrip_preserves_length_and_signal():
+    sim = RadioChannelSim()
+    p = ChannelParams.sample(random.Random(6))
+    p.codec_level = 0.9
+    p.squelch_click = False
+    with_codec, _ = sim(_tone(f=1000), 24000, random.Random(6), params=p)
+    p.codec_level = 0.0
+    without, _ = sim(_tone(f=1000), 24000, random.Random(6), params=p)
+    assert len(with_codec) == len(without)
+    assert np.isfinite(with_codec).all()
+    assert np.std(with_codec) > 1e-3  # signal survived the codec
+
+
+def test_double_hop_runs_and_degrades():
+    sim = RadioChannelSim()
+    wav1, _ = sim(_tone(), 24000, random.Random(7), hops=1)
+    wav2, _ = sim(_tone(), 24000, random.Random(7), hops=2)
+    assert np.isfinite(wav2).all()
+    assert abs(len(wav2) - len(wav1)) < 100  # length roughly stable across hops
+
+
+def test_noise_bank(tmp_path):
+    from atcgen.channel.dsp import NoiseBank
+
+    import soundfile as sf
+    bed = np.random.default_rng(0).standard_normal(TARGET_SR // 2).astype(np.float32) * 0.05
+    sf.write(tmp_path / "noise_00000.wav", bed, TARGET_SR)
+
+    bank = NoiseBank(tmp_path)
+    crop = bank.sample(TARGET_SR * 2, random.Random(0))  # longer than the bed -> tiled
+    assert len(crop) == TARGET_SR * 2
+
+    sim = RadioChannelSim(noise_bank=bank)
+    wav, _ = sim(_tone(), 24000, random.Random(8))
+    assert np.isfinite(wav).all()
+
+
+def test_mild_params_run():
+    sim = RadioChannelSim()
+    p = ChannelParams.mild(random.Random(9))
+    wav, _ = sim(_tone(), 24000, random.Random(9), params=p)
+    assert np.isfinite(wav).all()
+    assert np.abs(wav).max() <= 1.0
