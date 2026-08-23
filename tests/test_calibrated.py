@@ -12,6 +12,7 @@ from collections import Counter
 import numpy as np
 import pytest
 import soundfile as sf
+from scipy import signal
 
 from atcgen.channel.learned.backend import (COCHANNEL_PROB, PTT_PROB,
                                             CalibratedChannel, StationNoise)
@@ -46,9 +47,13 @@ def calibration(tmp_path):
     noise_dir.mkdir()
     rows = []
     rng = np.random.default_rng(0)
-    for station in STATIONS:
+    for station, (low, high, _) in STATIONS.items():
+        # band-limited like a real harvest: these segments come out of clips the
+        # receiver already filtered, and the backend relies on that
+        sos = signal.butter(4, [low, high], btype="bandpass", fs=SR, output="sos")
         for _ in range(5):
-            segment = rng.standard_normal(int(0.3 * SR)).astype(np.float32) * 0.01
+            segment = signal.sosfilt(
+                sos, rng.standard_normal(int(0.3 * SR))).astype(np.float32) * 0.01
             sf.write(noise_dir / f"{len(rows):04d}.wav", segment, SR)
             rows.append({"source_clip": "c", "station": station, "duration": 0.3,
                          "rms_db": -40.0, "ltas_centroid_hz": 1000.0,
@@ -75,6 +80,13 @@ def _no_codec() -> PostEffectsConfig:
     """Post-effects with the codec off, so a spectrum reads the fitted band."""
     effects = PostEffectsConfig()
     effects.codec.prob = 0.0
+    return effects
+
+
+def _no_post() -> PostEffectsConfig:
+    """Nothing but the fitted chain, for measuring what a post-effect adds."""
+    effects = PostEffectsConfig()
+    effects.codec.prob = effects.squelch.prob = effects.dropouts.prob = 0.0
     return effects
 
 
@@ -369,3 +381,56 @@ def test_build_dataset_end_to_end(tmp_path, calibration):
 
     stats = json.loads((out / "stats.json").read_text())
     assert stats["mode"] == "calibrated" and stats["snr_db"]["n"] == 12
+
+
+# --------------------------------------------------------------------------- #
+# artifacts that would otherwise land outside the fitted band
+# --------------------------------------------------------------------------- #
+
+def _hf_db(x: np.ndarray) -> float:
+    """Energy above 5 kHz, in dB relative to the clip's total."""
+    spectrum = np.abs(np.fft.rfft(np.asarray(x, dtype=np.float64))) ** 2
+    freqs = np.fft.rfftfreq(len(x), 1.0 / SR)
+    return float(10.0 * np.log10(spectrum[freqs >= 5000].sum() / spectrum.sum() + 1e-20))
+
+
+def test_squelch_clicks_are_band_limited_but_keep_their_level(calibration):
+    from atcgen.channel.primitives import squelch_clicks
+
+    channel = _channel(calibration)
+    preset = channel.by_station["ALPHA_TOWER"][0]
+    speech, _ = _channel(calibration, station_mix={"ALPHA_TOWER": 1.0},
+                         post_effects=_no_post())(_speech(), SR, random.Random(0))
+
+    added = squelch_clicks(speech, SR, random.Random(1)) - speech
+    raw = speech + added
+    limited = channel._band_limited(speech, added, preset)
+
+    # the click the receiver delivers is shaped like the band it delivers it in
+    assert _hf_db(limited - speech) < _hf_db(added) - 15.0
+    assert _hf_db(limited) < _hf_db(raw) - 15.0
+    # and it is still a click: quieter than the raw one only by the out-of-band
+    # part the filter threw away
+    click = np.sqrt(np.mean((limited - speech) ** 2))
+    assert 0.05 < click / np.sqrt(np.mean(added ** 2)) < 1.0
+    assert click > 0.05 * np.sqrt(np.mean(speech ** 2))
+
+
+def test_dropouts_attenuate_deeply_without_splattering(calibration):
+    from atcgen.channel.primitives import dropouts as raw_dropouts
+
+    channel = _channel(calibration)
+    preset = channel.by_station["ALPHA_TOWER"][0]
+    speech, _ = _channel(calibration, station_mix={"ALPHA_TOWER": 1.0},
+                         post_effects=_no_post())(_speech(3.0), SR, random.Random(0))
+
+    raw = raw_dropouts(speech, SR, random.Random(4), dropout_prob=1.0, count_lam=1.0,
+                       min_ms=10.0, max_ms=40.0)
+    ramped = channel._dropouts(speech, random.Random(4), preset)
+
+    window = np.abs(raw - speech) > 1e-6
+    assert window.any()
+    before = np.sqrt(np.mean(speech[window] ** 2))
+    after = np.sqrt(np.mean(ramped[window] ** 2))
+    assert 20.0 * np.log10(before / after) > 15.0        # still a real dropout
+    assert _hf_db(ramped) < _hf_db(raw) - 10.0           # without the splatter

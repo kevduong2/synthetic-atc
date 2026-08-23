@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 import soundfile as sf
+from scipy.signal import fftconvolve
 
 from ...config import CalibratedConfig, DistSpec, PostEffectsConfig
 from ..chain import PAD_SEC, ChannelRecord, UtteranceMeta
@@ -47,6 +48,7 @@ SQUELCH_ATTACK_MS = (5.0, 40.0)
 SQUELCH_RELEASE_MS = (10.0, 50.0)
 RELAY_SNR_DB = (25.0, 40.0)                 # the relayed hop is the quieter one
 NOISE_FADE_MS = 5.0
+DROPOUT_RAMP_MS = 2.0                       # see CalibratedChannel._dropouts
 
 
 class StationNoise:
@@ -144,6 +146,7 @@ class CalibratedChannel:
         # taps are a pure function of a preset's band gains, and a preset is
         # redrawn every utterance out of a pool of ~1k: build each set once
         self._taps: dict[int, np.ndarray] = {}
+        self._unit_taps: dict[int, np.ndarray] = {}
 
     @classmethod
     def from_config(cls, config: CalibratedConfig, target_sr: int = TARGET_SR
@@ -173,6 +176,15 @@ class CalibratedChannel:
                                        self.target_sr)
         return self._taps[key]
 
+    def _unit_taps_for(self, preset: Preset) -> np.ndarray:
+        """The same filter at unit peak gain, for passing artifacts through."""
+        key = id(preset)
+        if key not in self._unit_taps:
+            taps = self._taps_for(preset)
+            peak = float(np.abs(np.fft.rfft(taps, 8192)).max())
+            self._unit_taps[key] = taps / peak if peak > 0 else taps
+        return self._unit_taps[key]
+
     def _bed(self, preset: Preset, n: int, rng: random.Random
              ) -> tuple[np.ndarray | None, str | None]:
         """A noise bed for `preset`, and the station it actually came from."""
@@ -188,16 +200,18 @@ class CalibratedChannel:
                  rng: random.Random) -> tuple[np.ndarray, str | None]:
         """One pass of the fitted chain, with a real bed as its noise floor.
 
-        The bed goes through the EQ like the synthetic noise the fit used, even
-        though a harvested bed already carries a real receiver's band shape.
-        Applying it twice costs nothing where it matters — the passband is flat,
-        so only the already-inaudible skirts get steeper — and it guarantees the
-        output's band is the fitted one, rather than whatever the bed happened to
-        contain out of band.
+        A harvested bed skips the EQ (`filter_noise=False`); only the fit's own
+        synthetic fallback goes through it.  The bed already carries a real
+        receiver's band shape, and filtering it again is not the harmless
+        no-op it looks like: at a ~18 dB SNR the floor *is* the top few percent
+        of the clip's power, so a doubly band-limited bed drops the measured
+        98%-power spectral edge by ~125 Hz and costs 0.4 dB of LTAS distance.
+        The floor is what fills the spectrum above the speech, in real clips and
+        in these.
         """
         bed, bed_station = self._bed(preset, len(x), rng)
         return apply_preset(x, self.target_sr, preset, noise=bed, snr_db=snr_db,
-                            filter_noise=True,
+                            filter_noise=bed is None,
                             taps=self._taps_for(preset)), bed_station
 
     # -- the backend interface ---------------------------------------------- #
@@ -239,7 +253,7 @@ class CalibratedChannel:
                                               max(hops, 1) - 1))
         record.snr_db = round(float(snr), 2)
 
-        x = self._post_effects(x, rng, record, pad, interference)
+        x = self._post_effects(x, rng, record, pad, preset, interference)
         peak = float(np.abs(x).max())
         if peak > 1.0:
             x = x / peak * 0.98
@@ -253,8 +267,45 @@ class CalibratedChannel:
                 "noise_station": bed_station, "snr_db": round(float(snr_db), 2),
                 "drive": preset.drive, "passband_hz": preset.passband_hz}
 
+    def _band_limited(self, x: np.ndarray, added: np.ndarray,
+                      preset: Preset) -> np.ndarray:
+        """Add `added` to `x` through the receiver's own audio filter.
+
+        A squelch click is broadband noise generated in the receiver, upstream
+        of the filter that gives a real clip its band.  The fitted chain has
+        already applied that filter, so adding the click afterwards leaves
+        energy ~10 dB above the real set's at 5-7 kHz, where real clips have
+        essentially none.
+
+        The filter is normalized to unit peak gain, so the click passes intact
+        where the receiver passes most and is attenuated by the fitted shape
+        elsewhere.  Losing the out-of-band part costs it about 13 dB, which is
+        not a loss to correct for: it puts the click at 0.018 of the clip's RMS,
+        against the 0.024 the real clips carry over their own first 100 ms.
+        """
+        return (x + fftconvolve(added, self._unit_taps_for(preset),
+                                mode="same")).astype(np.float32)
+
+    def _dropouts(self, x: np.ndarray, rng: random.Random,
+                  preset: Preset) -> np.ndarray:
+        """`dropouts`, with the rise and fall a real signal loss would have.
+
+        The primitive mutes rectangular windows, and a rectangular gate on
+        band-limited audio splatters across the whole spectrum — worth 10 dB of
+        LTAS error above 3.4 kHz on its own.  Running it over a unit signal
+        recovers exactly the gain envelope it drew (count, placement, depth) and
+        a `DROPOUT_RAMP_MS` raised cosine takes the corners off, which is what
+        the receiver's filter would have done to them.
+        """
+        gain = dropouts(np.ones(len(x), np.float32), self.target_sr, rng,
+                        dropout_prob=1.0, count_lam=1.0, min_ms=10.0, max_ms=40.0)
+        width = max(3, int(self.target_sr * DROPOUT_RAMP_MS / 1000))
+        ramp = np.hanning(width + 2)[1:-1]
+        return (x * np.convolve(gain, ramp / ramp.sum(), mode="same")).astype(np.float32)
+
     def _post_effects(self, x: np.ndarray, rng: random.Random, record: ChannelRecord,
-                      pad: int, interference: np.ndarray | None) -> np.ndarray:
+                      pad: int, preset: Preset,
+                      interference: np.ndarray | None) -> np.ndarray:
         """The receiving station's own artifacts, in the order it produces them."""
         if interference is not None and rng.random() < COCHANNEL_PROB:
             level = rng.uniform(*COCHANNEL_LEVEL)
@@ -264,19 +315,22 @@ class CalibratedChannel:
                                  "level": round(level, 3)})
 
         if rng.random() < self.post.dropouts.prob:
-            x = dropouts(x, self.target_sr, rng, dropout_prob=1.0, count_lam=1.0,
-                         min_ms=10.0, max_ms=40.0)
+            x = self._dropouts(x, rng, preset)
             record.steps.append({"primitive": "dropouts", "hop": 0})
 
         if rng.random() < self.post.squelch.prob:
             gated = rng.random() < self.post.squelch.gated_floor_prob
             floor = rng.uniform(*(SQUELCH_FLOOR_GATED_DB if gated
                                   else SQUELCH_FLOOR_OPEN_DB))
+            # tail_burst off: it is raw white noise added after the fitted EQ,
+            # and the closing click below is the same artifact, band-limited
             x = squelch_gate(x, self.target_sr, rng, floor_db=floor,
                              attack_ms=rng.uniform(*SQUELCH_ATTACK_MS),
                              release_ms=rng.uniform(*SQUELCH_RELEASE_MS),
-                             threshold_db=rng.uniform(*SQUELCH_THRESHOLD_DB), pad=pad)
-            x = squelch_clicks(x, self.target_sr, rng)
+                             threshold_db=rng.uniform(*SQUELCH_THRESHOLD_DB),
+                             tail_burst_prob=0.0, pad=pad)
+            x = self._band_limited(x, squelch_clicks(x, self.target_sr, rng) - x,
+                                   preset)
             record.steps.append({"primitive": "squelch_gate", "hop": 0,
                                  "floor_db": round(floor, 1), "gated_floor": gated})
             record.steps.append({"primitive": "squelch_clicks", "hop": 0})
