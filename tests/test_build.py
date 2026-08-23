@@ -137,12 +137,14 @@ def test_manifest_record_schema_and_gen_blob(tmp_path):
         assert (tmp_path / "out" / record["audio"]).exists()
         gen = record["gen"]
         assert set(gen) == {"mode", "config_hash", "seed_index", "voice", "speed",
-                            "pitch", "channel", "qc"}
+                            "pitch", "tempo", "eq_tilt_db", "channel", "qc"}
         assert gen["mode"] == "procedural"
         assert gen["seed_index"] == index
         assert gen["voice"] in config.tts.voices
         assert 0.95 <= gen["speed"] <= 1.55
-        assert gen["pitch"] is None                      # lands in P3
+        assert gen["pitch"] is None or -2.0 <= gen["pitch"] <= 2.0
+        assert gen["tempo"] is None or 0.9 <= gen["tempo"] <= 1.1
+        assert gen["eq_tilt_db"] is None or -3.0 <= gen["eq_tilt_db"] <= 3.0
         assert set(gen["channel"]) == {"hops", "clean_arm", "snr_db", "steps"}
         assert 8 <= gen["channel"]["snr_db"] <= 25
         assert gen["qc"] == {"ok": True, "reason": None, "attempts": 1}

@@ -38,6 +38,7 @@ from ..eval.qc import QCConfig as QCGates
 from ..eval.qc import QCTally, qc_sample
 from ..text.grammar import Utterance
 from ..text.sources import TextSource, WeightedSampler, make_text_source
+from ..tts.augment import VoiceAugment
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "mode1_default.yaml"
 NOISE_ONLY_SEC = (2.0, 6.0)          # duration range of the noise-only samples
@@ -80,6 +81,7 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
     (out / "wavs").mkdir(parents=True, exist_ok=True)
     sr = config.output.sample_rate
     rng = random.Random(config.seed)
+    augment_rng = random.Random(f"{config.seed}:voice-augment")
 
     if text_source is None or isinstance(text_source, str):
         text_source = make_text_source(text_source or "grammar")
@@ -87,6 +89,7 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
     if tts is None:
         from ..tts import KokoroTTS
         tts = KokoroTTS(voices=config.tts.voices)
+    voice_augment = VoiceAugment.from_config(config.voice_augment)
 
     names, weights, backends = _backend_pool(config)
     _, resolved_hash = dump_resolved(config, out)
@@ -108,8 +111,9 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
             # draws; the text stays put, so quota accounting stays honest
             result = None
             for attempt in range(config.qc.max_retries + 1 if config.qc.enabled else 1):
-                wav, gen = _render(config, tts, backends[backend_name], utterance,
-                                   rng, prev_wav)
+                wav, gen = _render(config, tts, voice_augment,
+                                   backends[backend_name], utterance, rng,
+                                   augment_rng, prev_wav)
                 if not config.qc.enabled:
                     break
                 result = qc_sample(wav, sr, utterance.transcript if utterance else None,
@@ -176,18 +180,21 @@ def _gates(qc: QCConfig) -> QCGates:
                    asr_gate=qc.asr_roundtrip)
 
 
-def _render(config: GeneratorConfig, tts, backend, utterance: Utterance | None,
-            rng: random.Random, interference) -> tuple[np.ndarray, dict]:
-    """One full render: TTS (or silence) -> channel -> post. Draws are per attempt."""
+def _render(config: GeneratorConfig, tts, voice_augment: VoiceAugment, backend,
+            utterance: Utterance | None, rng: random.Random,
+            augment_rng: random.Random, interference) -> tuple[np.ndarray, dict]:
+    """One render: TTS -> voice augment -> channel -> post. Draws are per attempt."""
     sr = config.output.sample_rate
     if utterance is None:
         wav, record = backend(_noise_bed(sr, rng), sr, rng,
                               UtteranceMeta(kind="noise", category="noise"))
         gen: dict = {"voice": None, "speed": None}
+        augment_record = {"pitch": None, "tempo": None, "eq_tilt_db": None}
     else:
         voice = rng.choice(config.tts.voices)
         speed = float(config.tts.speed.sample(rng))
         clean = _synthesize(tts, utterance.spoken, rng, voice, speed)
+        clean, augment_record = voice_augment(clean, tts.sample_rate, augment_rng)
         hops = 2 if (utterance.role == "pilot"
                      and rng.random() < config.dataset.pilot_double_hop_prob) else 1
         meta = UtteranceMeta(role=utterance.role, kind=utterance.kind,
@@ -196,7 +203,7 @@ def _render(config: GeneratorConfig, tts, backend, utterance: Utterance | None,
                               interference=interference, hops=hops)
         gen = {"voice": voice, "speed": round(speed, 3)}
     wav = _post(wav, config.output.loudness_db.sample(rng))
-    gen.update({"pitch": None, "channel": record.as_dict()})   # pitch lands in P3
+    gen.update({**augment_record, "channel": record.as_dict()})
     return wav, gen
 
 
