@@ -21,6 +21,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# Only the HTML report's plots need an extra package. The Tier 1/2 embedding
+# metrics (embed_dist.py, probe.py) add nothing: WavLM *and* CLAP both ship in
+# `transformers`, already a base dependency, so `laion-clap` is not required.
 eval = ["matplotlib>=3.8"]
 
 [build-system]
