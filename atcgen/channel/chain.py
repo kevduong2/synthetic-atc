@@ -4,14 +4,17 @@ Each `ChainStep` is applied in order with per-sample draws: the step is skipped
 when `rng.random() >= step.prob`, and every parameter is drawn from its
 `DistSpec`.  `ChannelRecord` keeps what was actually applied, for the manifest.
 
-Hop structure (ported from `dsp.py`): the transmit-path effects run once per
-hop, while the `RECEIVER_END` primitives — co-channel mix, squelch clicks and
-the delivery codec — run once after the last hop, because they belong to the
-receiving station rather than to each radio in a relay.  `hops=2` models pilot
-audio relayed through a ground station: the second hop draws fresh parameters,
-with the noise floor forced to `HOP2_SNR_DB` as dsp.py did.  Which primitives
-are receiver-end is a module constant, not config: it is a property of where
-the effect physically happens, not of a profile.
+Hop structure (ported from `dsp.py`, extended in P1): the chain runs in three
+stages, matching where in the physical path each effect happens.  `SOURCE_ONCE`
+primitives belong to the talker — the handset's timbre, the moment they pressed
+PTT — so they run once on the source audio however many radios follow.  Everything
+else is transmit/path-side and runs once per hop.  `RECEIVER_END` primitives
+belong to the receiving station — the co-channel sum arriving at its antenna, its
+AGC and squelch, the delivery codec — so they run once after the last hop.
+`hops=2` models pilot audio relayed through a ground station: the second hop
+draws fresh parameters, with the noise floor forced to `HOP2_SNR_DB` as dsp.py
+did.  Stage membership is a module constant, not config: it is a property of
+where the effect physically happens, not of a profile.
 
 The clean arm (`clean_arm_prob`, 03 §1's MTR zero-effects arm) bypasses the
 chain apart from `CLEAN_ARM_KEEP` (bandpass) and the 16 kHz resample.
@@ -29,7 +32,9 @@ from ..config import ChainStep, ChannelConfig, DistSpec
 from .primitives import PRIMITIVES, TARGET_SR, NoiseBank, resample
 
 PAD_SEC = 0.15                # silence framing the speech, so clicks/noise have room
-RECEIVER_END = {"cochannel_mix", "squelch_clicks", "codec_roundtrip"}
+SOURCE_ONCE = {"mic_coloration", "ptt_truncation"}
+RECEIVER_END = {"cochannel_mix", "agc_attack", "squelch_gate", "squelch_clicks",
+                "codec_roundtrip"}
 CLEAN_ARM_KEEP = {"bandpass"}
 HOP2_SNR_DB = (10.0, 25.0)    # relay hop: quieter noise floor than the first radio
 
@@ -99,13 +104,18 @@ class ProceduralChannel:
         x = np.concatenate([np.zeros(pad, np.float32), x, np.zeros(pad, np.float32)])
 
         record = ChannelRecord(hops=hops, clean_arm=rng.random() < self.clean_arm_prob)
-        per_hop = [s for s in self.steps if s.primitive not in RECEIVER_END]
+        source = [s for s in self.steps if s.primitive in SOURCE_ONCE]
+        per_hop = [s for s in self.steps
+                   if s.primitive not in SOURCE_ONCE and s.primitive not in RECEIVER_END]
         tail = [s for s in self.steps if s.primitive in RECEIVER_END]
         if record.clean_arm:
+            source = [s for s in source if s.primitive in CLEAN_ARM_KEEP]
             per_hop = [s for s in per_hop if s.primitive in CLEAN_ARM_KEEP]
             tail = []
             record.hops = hops = 1
 
+        for step in self._ordered(source, rng):
+            x = self._apply(step, x, rng, record, hop=0, pad=pad)
         for hop in range(hops):
             for step in self._ordered(per_hop, rng):
                 x = self._apply(step, x, rng, record, hop=hop, pad=pad)

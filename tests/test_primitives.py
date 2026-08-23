@@ -2,6 +2,7 @@ import random
 
 import numpy as np
 import pytest
+from scipy import signal
 
 from atcgen.channel import primitives as P
 from atcgen.channel.primitives import TARGET_SR, NoiseBank, resample
@@ -166,6 +167,190 @@ def test_codec_roundtrip_preserves_length_and_signal():
     assert np.isfinite(y).all()
     assert np.std(y) > 1e-3
     assert _band_power(y, 900, 1100) > 0.5 * _band_power(x, 900, 1100)
+
+
+PAD = int(SR * 0.15)
+
+
+def _rms(x):
+    return float(np.sqrt(np.mean(np.asarray(x, dtype=np.float64) ** 2))) if len(x) else 0.0
+
+
+def _gated_fixture(gap_sec=0.0, speech_sec=1.0, noise_amp=0.02, sr=SR):
+    """Padded clip: noise everywhere, speech (a 4 Hz-modulated tone) in the middle,
+    optionally with a silent-but-for-noise gap in the speech."""
+    speech = _tone(f=800, sec=speech_sec, amp=0.5)
+    t = np.arange(len(speech)) / sr
+    speech *= (0.6 + 0.4 * np.sin(2 * np.pi * 4 * t)).astype(np.float32)
+    if gap_sec > 0:
+        mid = len(speech) // 2
+        speech[mid:mid + int(sr * gap_sec)] = 0.0
+    x = np.concatenate([np.zeros(PAD, np.float32), speech, np.zeros(PAD, np.float32)])
+    noise = np.random.default_rng(0).standard_normal(len(x)).astype(np.float32) * noise_amp
+    return (x + noise).astype(np.float32)
+
+
+def test_squelch_gate_drops_the_pad_to_the_floor():
+    x = _gated_fixture()
+    floor_db = -40.0
+    y = P.squelch_gate(x, SR, random.Random(0), floor_db=floor_db, attack_ms=10.0,
+                       release_ms=30.0, tail_burst_prob=0.0, pad=PAD)
+    assert len(y) == len(x)
+    # measured clear of the release ramp at each end of the padding
+    drop_db = 20 * np.log10(_rms(y[PAD // 4:PAD - 200]) / _rms(x[PAD // 4:PAD - 200]))
+    assert drop_db <= floor_db + 6.0                    # ramp/interpolation tolerance
+    assert _rms(y[PAD:len(x) - PAD]) > 0.5 * _rms(x[PAD:len(x) - PAD])   # speech survives
+
+
+@pytest.mark.parametrize("floor_db", [-20.0, -60.0])
+def test_squelch_gate_floor_depth_follows_the_parameter(floor_db):
+    x = _gated_fixture()
+    y = P.squelch_gate(x, SR, random.Random(0), floor_db=floor_db,
+                       tail_burst_prob=0.0, pad=PAD)
+    quiet = slice(PAD // 4, PAD - 200)
+    assert 20 * np.log10(_rms(y[quiet]) / _rms(x[quiet])) == pytest.approx(floor_db, abs=6.0)
+
+
+def test_squelch_gate_closes_on_intra_speech_silence():
+    x = _gated_fixture(gap_sec=0.3)
+    y = P.squelch_gate(x, SR, random.Random(0), floor_db=-40.0, hold_ms=20.0,
+                       threshold_db=-20.0, tail_burst_prob=0.0, pad=PAD)
+    mid = PAD + int(SR * 0.5)                            # inside the 300 ms gap
+    gap = slice(mid + 1600, mid + 3200)                  # clear of the release ramp
+    assert _rms(y[gap]) < 0.2 * _rms(x[gap])
+    # the same clip at a threshold below its noise floor keeps the gate open
+    loose = P.squelch_gate(x, SR, random.Random(0), floor_db=-40.0, hold_ms=20.0,
+                           threshold_db=-40.0, tail_burst_prob=0.0, pad=PAD)
+    assert _rms(loose[gap]) > 0.9 * _rms(x[gap])
+
+
+def test_squelch_gate_tail_burst_is_added_at_the_close():
+    x = _gated_fixture()
+    args = dict(floor_db=-60.0, pad=PAD)
+    quiet = P.squelch_gate(x, SR, random.Random(0), tail_burst_prob=0.0, **args)
+    burst = P.squelch_gate(x, SR, random.Random(0), tail_burst_prob=1.0,
+                           tail_burst_amp=0.5, **args)
+    added = burst - quiet
+    assert np.count_nonzero(added[:len(x) - PAD]) == 0    # only after the speech ends
+    assert _rms(added[len(x) - PAD:]) > 5 * _rms(quiet[len(x) - PAD // 2:])
+    assert np.abs(added).max() > 0.1                      # amp 0.5 x the envelope peak
+
+
+def test_ptt_truncation_shortens_speech_but_not_the_array():
+    x = _gated_fixture(noise_amp=0.0)
+    y = P.ptt_truncation(x, SR, random.Random(0), head_ms=120.0, tail_ms=60.0, pad=PAD)
+    assert len(y) == len(x)
+    head, tail = int(SR * 0.120), int(SR * 0.060)
+    assert _rms(y[PAD:PAD + head]) == 0.0
+    assert _rms(y[len(x) - PAD - tail:len(x) - PAD]) == 0.0
+    assert _rms(x[PAD:PAD + head]) > 0.1                 # there was speech there
+    middle = slice(PAD + head + 200, len(x) - PAD - tail - 200)
+    assert np.array_equal(y[middle], x[middle])          # untouched between the cuts
+
+
+def test_ptt_truncation_anchors_on_the_first_audible_sample():
+    """TTS leading silence must not absorb the cut -- phonemes have to go."""
+    lead = int(SR * 0.4)
+    speech = _tone(f=800, sec=1.0, amp=0.5)
+    x = np.concatenate([np.zeros(PAD + lead, np.float32), speech,
+                        np.zeros(PAD + lead, np.float32)])
+    y = P.ptt_truncation(x, SR, random.Random(0), head_ms=100.0, tail_ms=100.0, pad=PAD)
+    cut = int(SR * 0.100)
+    assert _rms(y[PAD + lead:PAD + lead + cut]) == 0.0        # speech, not silence
+    assert _rms(x[PAD + lead:PAD + lead + cut]) > 0.1
+    assert _rms(y[len(x) - PAD - lead - cut:len(x) - PAD - lead]) == 0.0
+    assert _rms(y[PAD + lead + cut + 200:len(x) - PAD - lead - cut - 200]) > 0.1
+
+
+def test_ptt_truncation_defaults_and_caps_are_noops_or_bounded():
+    x = _gated_fixture(noise_amp=0.0)
+    assert np.array_equal(P.ptt_truncation(x, SR, random.Random(0), pad=PAD), x)
+    # a cut longer than the speech is clamped to a third of the extent, not fatal
+    y = P.ptt_truncation(x, SR, random.Random(0), head_ms=9000.0, pad=PAD)
+    assert len(y) == len(x) and np.isfinite(y).all()
+    assert _rms(y[PAD:len(x) - PAD]) > 0.0
+
+
+@pytest.mark.parametrize("tilt_db", [-4.0, 4.0])
+def test_mic_coloration_tilt_sign_moves_the_spectral_slope(tilt_db):
+    x = np.random.default_rng(0).standard_normal(SR * 2).astype(np.float32) * 0.1
+    y = P.mic_coloration(x, SR, random.Random(0), tilt_db=tilt_db, peaks=0)
+    ratio = _band_power(y, 2000, 4000) / _band_power(y, 200, 500)
+    base = _band_power(x, 2000, 4000) / _band_power(x, 200, 500)
+    assert (ratio > 1.4 * base) if tilt_db > 0 else (ratio < 0.7 * base)
+
+
+def test_mic_coloration_peaks_are_bounded_and_local():
+    x = np.random.default_rng(0).standard_normal(SR * 2).astype(np.float32) * 0.1
+    y = P.mic_coloration(x, SR, random.Random(2), tilt_db=0.0, peaks=2, peak_gain_db=6.0)
+    assert len(y) == len(x) and np.isfinite(y).all()
+    # +-6 dB peaking filters cannot move the broadband level far
+    assert abs(20 * np.log10(_rms(y) / _rms(x))) < 6.0
+    assert not np.allclose(y, x)
+    assert np.array_equal(P.mic_coloration(x, SR, random.Random(0), tilt_db=0.0, peaks=0), x)
+
+
+@pytest.mark.parametrize("rate_hz", [0.5, 2.0])
+def test_fading_modulates_the_envelope_at_the_configured_rate(rate_hz):
+    x = _tone(f=1000, sec=8.0)
+    y = P.fading(x, SR, random.Random(0), rate_hz=rate_hz, depth_db=6.0)
+    gain = np.abs(y[np.abs(x) > 0.4]) / np.abs(x[np.abs(x) > 0.4])
+    # peak-to-trough matches depth_db; both bounds land within a tolerance
+    assert 20 * np.log10(gain.max() / gain.min()) == pytest.approx(6.0, abs=0.5)
+    env = np.abs(signal.hilbert(y.astype(np.float64)))
+    spec = np.abs(np.fft.rfft(env - env.mean()))
+    freqs = np.fft.rfftfreq(len(env), 1.0 / SR)
+    assert freqs[int(np.argmax(spec))] == pytest.approx(rate_hz, abs=0.2)
+    assert np.array_equal(P.fading(x, SR, random.Random(0), depth_db=0.0), x)
+
+
+def test_agc_attack_surges_at_the_start_of_the_transmission():
+    x = _gated_fixture(noise_amp=0.0)
+    y = P.agc_attack(x, SR, random.Random(0), attack_ms=100.0, surge_db=6.0, pad=PAD)
+    onset = slice(PAD, PAD + int(SR * 0.05))
+    late = slice(PAD + int(SR * 0.6), PAD + int(SR * 0.9))
+    assert 20 * np.log10(_rms(y[onset]) / _rms(x[onset])) == pytest.approx(5.0, abs=1.5)
+    assert _rms(y[late]) == pytest.approx(_rms(x[late]), rel=0.02)
+    assert np.array_equal(y[:PAD], x[:PAD])              # nothing before squelch open
+    assert np.array_equal(P.agc_attack(x, SR, random.Random(0), surge_db=0.0), x)
+
+
+def test_resample_chain_folds_content_back_into_the_band():
+    x = _tone(f=3000, sec=1.0)
+    y = P.resample_chain(x, SR, random.Random(0), narrow_sr=5000, alias=True)
+    assert len(y) == len(x)
+    # 3 kHz sampled at 5 kHz aliases to 5000 - 3000 = 2000 Hz
+    assert _band_power(y, 1900, 2100) > 10 * _band_power(y, 2900, 3100)
+    clean = P.resample_chain(x, SR, random.Random(0), narrow_sr=5000, alias=False)
+    assert _band_power(clean, 1900, 2100) < 0.01 * _band_power(y, 1900, 2100)
+    assert np.array_equal(P.resample_chain(x, SR, random.Random(0), narrow_sr=SR), x)
+
+
+@pytest.mark.parametrize("bitrate_kbps", [16, 23, 32, 64])
+def test_codec_roundtrip_bitrate_tiers_encode_and_decode(bitrate_kbps):
+    x = _tone(f=1000, sec=2.0)
+    y = P.codec_roundtrip(x, SR, random.Random(0), bitrate_kbps=bitrate_kbps)
+    assert len(y) == len(x)
+    assert np.isfinite(y).all() and np.std(y) > 1e-3
+    assert _band_power(y, 900, 1100) > 0.5 * _band_power(x, 900, 1100)
+
+
+def test_codec_roundtrip_encoded_size_scales_with_bitrate():
+    import io
+
+    import soundfile as sf
+
+    x = _tone(f=1000, sec=4.0)
+    sizes = []
+    for kbps in (16, 32, 64):
+        buf = io.BytesIO()
+        sf.write(buf, x, SR, format="MP3", bitrate_mode="CONSTANT",
+                 compression_level=P.MP3_CBR_COMPRESSION[kbps])
+        sizes.append(buf.getbuffer().nbytes * 8 / 4.0 / 1000)
+    assert sizes == [pytest.approx(kbps, rel=0.05) for kbps in (16, 32, 64)]
+    # 23 kbps is not in the MPEG-2 Layer III table; it snaps to LAME's 24
+    assert (P.codec_roundtrip(x, SR, random.Random(0), bitrate_kbps=23)
+            == pytest.approx(P.codec_roundtrip(x, SR, random.Random(0), bitrate_kbps=24)))
 
 
 def test_primitives_do_not_mutate_input():

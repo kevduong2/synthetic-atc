@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from atcgen.channel.chain import (HOP2_SNR_DB, PAD_SEC, RECEIVER_END,
-                                  ChannelRecord, ProceduralChannel,
+                                  SOURCE_ONCE, ChannelRecord, ProceduralChannel,
                                   UtteranceMeta, mild_chain)
 from atcgen.channel.primitives import TARGET_SR
 from atcgen.config import ChainStep, DistSpec, load_config
@@ -97,6 +97,35 @@ def test_second_hop_uses_relay_snr_range():
         hop2 = [s for s in rec.steps
                 if s["primitive"] == "additive_noise" and s["hop"] == 1]
         assert hop2 and all(HOP2_SNR_DB[0] <= s["snr_db"] <= HOP2_SNR_DB[1] for s in hop2)
+
+
+def test_source_stage_runs_once_and_first_whatever_the_hop_count():
+    steps = [_step("bandpass", low=300.0, high=3400.0),
+             _step("mic_coloration", tilt_db=3.0),
+             _step("ptt_truncation", head_ms=50.0),
+             _step("additive_noise", snr_db=20.0),
+             _step("squelch_gate", floor_db=-40.0, tail_burst_prob=0.0)]
+    sim = ProceduralChannel(steps)
+    _, rec = sim(_tone(), 24000, random.Random(0), hops=2)
+    applied = rec.applied()
+    assert [s for s in applied if s in SOURCE_ONCE] == ["mic_coloration", "ptt_truncation"]
+    assert applied[:2] == ["mic_coloration", "ptt_truncation"]     # before any hop
+    assert all(s["hop"] == 0 for s in rec.steps if s["primitive"] in SOURCE_ONCE)
+    assert applied.count("bandpass") == 2                          # path side, per hop
+
+
+def test_receiver_stage_gates_the_padding_after_the_noise():
+    steps = [_step("additive_noise", snr_db=6.0),
+             _step("squelch_gate", floor_db=-45.0, tail_burst_prob=0.0)]
+    gated = ProceduralChannel(steps)
+    plain = ProceduralChannel(steps[:1])
+    pad = int(TARGET_SR * PAD_SEC)
+    quiet, _ = gated(_tone(), 24000, random.Random(2))
+    noisy, _ = plain(_tone(), 24000, random.Random(2))
+    head = slice(pad // 4, pad - 400)
+    assert np.std(noisy[head]) > 1e-3                              # continuous noise bed
+    assert np.std(quiet[head]) < 0.1 * np.std(noisy[head])         # ... gated away
+    assert {"squelch_gate", "agc_attack"} <= RECEIVER_END
 
 
 def test_bandpass_removes_out_of_band_energy_through_the_chain():
