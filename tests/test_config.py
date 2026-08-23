@@ -68,6 +68,19 @@ def test_unknown_key_reports_full_path(tmp_path):
         load_config(path)
 
 
+def test_channel_noise_beds_dir_parses_strictly_and_lazily(tmp_path):
+    missing = tmp_path / "noise-beds"
+    path = tmp_path / "noise.yaml"
+    path.write_text(f"mode: procedural\nchannel:\n  noise:\n    beds_dir: {missing}\n")
+    config = load_config(path)
+    assert config.channel is not None
+    assert config.channel.noise.beds_dir == str(missing)
+
+    path.write_text("mode: procedural\nchannel:\n  noise:\n    bed_prob: 0.8\n")
+    with pytest.raises(ValueError, match=r"unknown config key: channel\.noise\.bed_prob"):
+        load_config(path)
+
+
 def test_dot_path_overrides(tmp_path):
     path = tmp_path / "base.yaml"
     path.write_text("mode: procedural\nseed: 1\n")

@@ -379,6 +379,28 @@ def test_calibrated_backend_is_not_implemented_yet(tmp_path):
         make_backend(load_config(path))
 
 
+def test_procedural_backend_receives_configured_noise_bank(tmp_path):
+    beds_dir = tmp_path / "noise-beds"
+    beds_dir.mkdir()
+    sf.write(beds_dir / "bed.wav", np.full(1600, 0.1, np.float32), 16000)
+    channel = LIGHT_CHANNEL.replace(
+        "channel:\n", f"channel:\n  noise: {{beds_dir: {beds_dir}}}\n", 1)
+
+    backend = make_backend(config_for(tmp_path, channel=channel))
+
+    assert backend.noise_bank is not None
+    assert len(backend.noise_bank.clips) == 1
+
+
+def test_procedural_backend_rejects_missing_noise_beds_dir(tmp_path):
+    missing = tmp_path / "missing-noise-beds"
+    channel = LIGHT_CHANNEL.replace(
+        "channel:\n", f"channel:\n  noise: {{beds_dir: {missing}}}\n", 1)
+
+    with pytest.raises(ValueError, match=rf"no noise-bed wavs in {missing}"):
+        make_backend(config_for(tmp_path, channel=channel))
+
+
 def test_run_writes_resolved_config_and_stats(tmp_path):
     config = config_for(tmp_path, "dataset: {noise_only_frac: 0.5}\n")
     out = tmp_path / "out"

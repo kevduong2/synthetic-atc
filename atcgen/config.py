@@ -191,11 +191,17 @@ class ChainStep:
 
 
 @dataclass
+class ChannelNoiseConfig:
+    beds_dir: str | None = None
+
+
+@dataclass
 class ChannelConfig:
     profile: str = "wide"
     clean_arm_prob: float = 0.07
     chain: list[ChainStep] = field(default_factory=list)
     shuffle_groups: list[list[str]] = field(default_factory=list)
+    noise: ChannelNoiseConfig = field(default_factory=ChannelNoiseConfig)
 
 
 @dataclass
@@ -370,7 +376,8 @@ def _parse_qc(value: Any, path: str) -> QCConfig:
 
 def _parse_channel(value: Any, path: str) -> ChannelConfig:
     data = _mapping(value, path)
-    _reject_unknown(data, {"profile", "clean_arm_prob", "chain", "shuffle_groups"}, path)
+    _reject_unknown(data, {"profile", "clean_arm_prob", "chain", "shuffle_groups",
+                           "noise"}, path)
     profile = data.get("profile", "wide")
     if not isinstance(profile, str) or not profile:
         raise ValueError(f"{path}.profile must be a non-empty string")
@@ -398,11 +405,19 @@ def _parse_channel(value: Any, path: str) -> ChannelConfig:
                        and all(isinstance(name, str) and name for name in group)
                        for group in groups)):
         raise ValueError(f"{path}.shuffle_groups must be a list of string lists")
+    noise_path = f"{path}.noise"
+    noise_data = _mapping(data.get("noise", {}), noise_path)
+    _reject_unknown(noise_data, {"beds_dir"}, noise_path)
+    beds_dir = noise_data.get("beds_dir")
+    if beds_dir is not None and (not isinstance(beds_dir, str) or not beds_dir):
+        raise ValueError(f"{noise_path}.beds_dir must be a non-empty string or null")
     return ChannelConfig(
-        profile,
-        _probability(data.get("clean_arm_prob", 0.07), f"{path}.clean_arm_prob"),
-        chain,
-        [list(group) for group in groups],
+        profile=profile,
+        clean_arm_prob=_probability(
+            data.get("clean_arm_prob", 0.07), f"{path}.clean_arm_prob"),
+        chain=chain,
+        shuffle_groups=[list(group) for group in groups],
+        noise=ChannelNoiseConfig(beds_dir),
     )
 
 

@@ -32,7 +32,7 @@ import soundfile as sf
 from tqdm import tqdm
 
 from ..channel.chain import ProceduralChannel, UtteranceMeta
-from ..channel.primitives import TARGET_SR, pink_noise
+from ..channel.primitives import TARGET_SR, NoiseBank, pink_noise
 from ..config import GeneratorConfig, QCConfig, dump_resolved
 from ..eval.qc import QCConfig as QCGates
 from ..eval.qc import QCTally, qc_sample
@@ -56,8 +56,11 @@ def make_backend(config: GeneratorConfig, name: str | None = None):
     if name == "procedural":
         if config.channel is None:
             raise ValueError("mode 'procedural' requires a channel section")
+        beds_dir = config.channel.noise.beds_dir
+        noise_bank = NoiseBank(beds_dir) if beds_dir is not None else None
         return ProceduralChannel.from_config(
-            config.channel, target_sr=config.output.sample_rate)
+            config.channel, noise_bank=noise_bank,
+            target_sr=config.output.sample_rate)
     if name == "calibrated":
         raise NotImplementedError("the calibrated backend lands in M2.3")
     raise ValueError(f"unknown channel backend: {name}")
