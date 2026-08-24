@@ -10,8 +10,11 @@ and friends stay warning-free.
 
 from .qc import (QCConfig, QCResult, QCTally, Transcriber, default_transcriber,
                  qc_sample, whisper_transcriber)
+from .harness import (EvaluationArtifacts, build_verdict, format_diff,
+                      run_evaluation)
 
 __all__ = [
     "QCConfig", "QCResult", "QCTally", "Transcriber", "qc_sample",
-    "default_transcriber", "whisper_transcriber",
+    "default_transcriber", "whisper_transcriber", "EvaluationArtifacts",
+    "build_verdict", "format_diff", "run_evaluation",
 ]
