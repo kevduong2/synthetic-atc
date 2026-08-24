@@ -17,19 +17,27 @@ Draws are correlated on purpose: a preset comes with a noise bed harvested from
 clips.  Mixing a Center receiver's hiss into a Tower's channel is possible but
 rare (`cross_station_prob`), because the combination is not one any real
 receiver produces.
+
+The residual CUT translator (M2.4, `residual.py`) is the optional third stage:
+it sits between the fitted chain and the post-effects, at probability
+`residual.apply_prob`, and models what the fit misses.  It is off unless the
+config enables it *and* a trained checkpoint exists, so this module — and
+generation generally — never imports torch on the default path.
 """
 
 import random
+import warnings
 from collections import Counter, defaultdict
 from json import loads
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import soundfile as sf
 from scipy.signal import fftconvolve
 
-from ...config import CalibratedConfig, DistSpec, PostEffectsConfig
+from ...config import (CalibratedConfig, DistSpec, PostEffectsConfig,
+                       ResidualConfig)
 from ..chain import PAD_SEC, ChannelRecord, UtteranceMeta
 from ..primitives import TARGET_SR, codec_roundtrip, dropouts, resample
 from ..primitives import cochannel_mix, ptt_truncation, squelch_clicks, squelch_gate
@@ -49,6 +57,26 @@ SQUELCH_RELEASE_MS = (10.0, 50.0)
 RELAY_SNR_DB = (25.0, 40.0)                 # the relayed hop is the quieter one
 NOISE_FADE_MS = 5.0
 DROPOUT_RAMP_MS = 2.0                       # see CalibratedChannel._dropouts
+
+
+def _load_residual(config: ResidualConfig) -> Callable[..., np.ndarray] | None:
+    """The trained translator named by `residual:`, or None.
+
+    Imported here rather than at module scope because `residual.py` pulls in
+    torch and nothing else in Mode 2 generation needs it.  `enabled: true` with
+    no checkpoint on disk is the normal state before M2.4 has been trained on
+    the 5080, so it warns and falls back to the pure-DSP path instead of
+    failing a generation run that is otherwise fine.
+    """
+    if not config.enabled:
+        return None
+    from .residual import load_translator
+
+    translator = load_translator(config.checkpoint, config.residual_scale_max)
+    if translator is None:
+        warnings.warn(f"residual.enabled but no checkpoint at {config.checkpoint};"
+                      " generating with the fitted DSP chain only", stacklevel=2)
+    return translator
 
 
 class StationNoise:
@@ -117,7 +145,9 @@ class CalibratedChannel:
                  station_mix: dict[str, float] | None = None,
                  snr_jitter: DistSpec | None = None, cross_station_prob: float = 0.1,
                  post_effects: PostEffectsConfig | None = None,
-                 target_sr: int = TARGET_SR):
+                 target_sr: int = TARGET_SR,
+                 residual: Callable[..., np.ndarray] | None = None,
+                 residual_prob: float = 0.0):
         if not presets:
             raise ValueError("CalibratedChannel needs at least one preset")
         self.presets = list(presets)
@@ -126,6 +156,8 @@ class CalibratedChannel:
         self.cross_station_prob = cross_station_prob
         self.post = post_effects or PostEffectsConfig()
         self.target_sr = target_sr
+        self.residual = residual
+        self.residual_prob = float(residual_prob)
 
         self.by_station: dict[str, list[Preset]] = defaultdict(list)
         for preset in self.presets:
@@ -161,6 +193,8 @@ class CalibratedChannel:
             cross_station_prob=calibration.cross_station_prob,
             post_effects=config.post_effects,
             target_sr=target_sr,
+            residual=_load_residual(config.residual),
+            residual_prob=config.residual.apply_prob,
         )
 
     # -- sampling ----------------------------------------------------------- #
@@ -253,6 +287,7 @@ class CalibratedChannel:
                                               max(hops, 1) - 1))
         record.snr_db = round(float(snr), 2)
 
+        x = self._residual(x, rng, record)
         x = self._post_effects(x, rng, record, pad, preset, interference)
         peak = float(np.abs(x).max())
         if peak > 1.0:
@@ -285,6 +320,33 @@ class CalibratedChannel:
         """
         return (x + fftconvolve(added, self._unit_taps_for(preset),
                                 mode="same")).astype(np.float32)
+
+    def _residual(self, x: np.ndarray, rng: random.Random,
+                  record: ChannelRecord) -> np.ndarray:
+        """The learned residual, on a coin flip, between the fit and the events.
+
+        Order is the physical one, and it is also the one training assumed:
+        domain A was the fitted chain's output with post-effects off, so this is
+        the only place the translator has ever seen its input.  Applying it
+        after a squelch gate or an MP3 round-trip would hand it a distribution
+        it was never trained on.
+
+        `apply_prob` below 1 is deliberate (04 §2.4): the pure-DSP path stays
+        represented in every generated corpus, so a translator that turns out to
+        hurt ASR cannot have poisoned all of it.
+
+        The outcome is recorded two ways: `record.residual_applied` for callers
+        holding the object, and a step for the manifest (only when it fired, so
+        `record.applied()` stays a list of things that actually happened).
+        """
+        record.residual_applied = False
+        if self.residual is None or rng.random() >= self.residual_prob:
+            return x
+        y = np.asarray(self.residual(x, self.target_sr, rng), dtype=np.float32)
+        record.residual_applied = True
+        record.steps.append({"primitive": "residual_translate", "hop": 0,
+                             "residual_applied": True})
+        return y
 
     def _dropouts(self, x: np.ndarray, rng: random.Random,
                   preset: Preset) -> np.ndarray:
