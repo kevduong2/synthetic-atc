@@ -257,6 +257,7 @@ class ExpansionConfig:
     target_total: int = 10000
     category_quotas: dict[str, float] = field(default_factory=dict)
     holdout_frac: float = 0.15
+    external_texts: str | None = None
 
 
 @dataclass
@@ -501,7 +502,8 @@ def _parse_post_effects(value: Any, path: str) -> PostEffectsConfig:
 
 def _parse_expansion(value: Any, path: str) -> ExpansionConfig:
     data = _mapping(value, path)
-    names = {"real_manifest", "target_total", "category_quotas", "holdout_frac"}
+    names = {"real_manifest", "target_total", "category_quotas", "holdout_frac",
+             "external_texts"}
     _reject_unknown(data, names, path)
     default = ExpansionConfig()
     manifest = data.get("real_manifest", default.real_manifest)
@@ -510,11 +512,15 @@ def _parse_expansion(value: Any, path: str) -> ExpansionConfig:
         raise ValueError(f"{path}.real_manifest must be a non-empty string")
     if isinstance(total, bool) or not isinstance(total, int) or total <= 0:
         raise ValueError(f"{path}.target_total must be a positive integer")
+    external = data.get("external_texts", default.external_texts)
+    if external is not None and (not isinstance(external, str) or not external):
+        raise ValueError(f"{path}.external_texts must be a non-empty string or null")
     return ExpansionConfig(
         manifest, total,
         _quota_map(data.get("category_quotas", {}), f"{path}.category_quotas"),
         _probability(data.get("holdout_frac", default.holdout_frac),
                      f"{path}.holdout_frac"),
+        external,
     )
 
 

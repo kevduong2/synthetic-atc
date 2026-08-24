@@ -165,6 +165,7 @@ calibrated:
     target_total: 100
     category_quotas: {emergency: 0.1}
     holdout_frac: 0.2
+    external_texts: emergency.jsonl
 """
     )
     config = load_config(path)
@@ -172,3 +173,4 @@ calibrated:
     assert config.calibrated.calibration.station_mix == {"TOWER": 1.0}
     assert config.calibrated.residual.enabled is False
     assert config.calibrated.expansion.target_total == 100
+    assert config.calibrated.expansion.external_texts == "emergency.jsonl"
