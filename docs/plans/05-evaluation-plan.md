@@ -41,6 +41,49 @@ Protocol fixed once so results are comparable across versions:
    - **hallucination rate** on a noise-only test slice (fraction of non-empty hypotheses on speech-free audio; Whisper hallucinates on ~40% of non-speech, 2501.11378).
 4. Baselines to beat, in order: zero-shot Whisper-small; fine-tuned on real-only; Mode 1 synthetic; Mode 2 synthetic; mixed modes.
 
+#### Protocol as implemented (E3)
+
+Run these commands on the 5080 box with the model and datasets already cached. The two fixed baselines are zero-shot `whisper-small.en` and real-only fine-tuning:
+
+```bash
+uv run python training/evaluate.py --model openai/whisper-small.en --dataset real --out reports/zero_shot_small_en.json
+uv run python training/finetune_whisper.py --real-only --model openai/whisper-small.en --out runs/whisper_real_only --epochs 3 --batch-size 16 --fp16
+```
+
+Train every candidate under both required regimes. `--manifest` may be repeated for multiple synthetic manifests; `--real-manifest` may likewise be repeated to use local labeled-real training manifests instead of the cached public real train split. `--mix-real` remains available as the joint shuffled ~1:1 ablation, but is not a substitute for either fixed regime.
+
+```bash
+# synthetic-only
+uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl --model openai/whisper-small.en --out runs/whisper_synthetic_only --epochs 3 --batch-size 16 --fp16
+
+# synthetic-first -> real-last curriculum (3 epochs in each phase)
+uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl --curriculum --model openai/whisper-small.en --out runs/whisper_curriculum --epochs 3 --batch-size 16 --fp16
+
+# optional joint-mixing ablation
+uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl --mix-real --model openai/whisper-small.en --out runs/whisper_joint --epochs 3 --batch-size 16 --fp16
+```
+
+Evaluate each resulting checkpoint on the held-out local labeled-real manifest (primary) and the cached public ATCO2-1h + UWB-ATCC test dataset anchor. Evaluation manifests carry `category`; include their empty-reference `category: "noise"` records so hallucination rate is measured in the same report.
+
+```bash
+uv run python training/evaluate.py --model runs/whisper_curriculum --dataset data/eval/local_real/manifest.jsonl --out reports/whisper_curriculum_local.json
+uv run python training/evaluate.py --model runs/whisper_curriculum --dataset real --out reports/whisper_curriculum_public.json
+```
+
+Every `--out` file is one JSON object with this stable E3 shape (WER values are ratios, not percentages; unavailable slice metrics are `null`):
+
+```text
+schema_version, model, dataset
+samples: {total, speech, noise_only}
+wer: {raw, atc_normalized}
+per_category.<category>: {samples, wer: {raw, atc_normalized}}
+callsign: {samples, wer: {raw, atc_normalized}, reference_sequences,
+           exact_sequences, token_accuracy}
+hallucination: {samples, non_empty_hypotheses, rate}
+```
+
+Noise-only records are excluded from aggregate, category, and callsign WER. Callsign accuracy is exact normalized token-sequence reproduction. Results are comparable only when produced with the same normalization scheme; raw and ATC-normalized WER must never be compared to one another.
+
 ### Listening protocol (qualitative, every version)
 Fixed 20-sample audition sheet per generator version (same seeds/texts across versions): 5 routine, 5 emergency, 5 extreme-parameter draws, 5 noise-only, rendered next to 5 random real clips. One-page HTML report with players + Tier 1 plots. Human A/B spot-check: can a team member pick the synthetic one >70% of the time? (Informal probe complement.)
 

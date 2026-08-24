@@ -1,19 +1,40 @@
 #!/usr/bin/env python
-"""Fine-tune Whisper on a synthetic ATC dataset (optionally mixed with real data).
+"""Fine-tune Whisper under the fixed Tier 3 ATC training regimes.
 
 Small validation run on the Mac:
-  uv run python training/finetune_whisper.py --manifest data/smoke/manifest.jsonl \\
+  uv run python training/finetune_whisper.py --manifest data/smoke/manifest.jsonl \
       --model openai/whisper-tiny.en --out runs/whisper_smoke --max-steps 5 --eval-set holdout
 
-Real run on the 5080:
-  uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl \\
-      --model openai/whisper-small.en --out runs/whisper_atc --epochs 3 --batch-size 16 --fp16
+5080 protocol (run with cached model/data; never on the development machine):
+  # Baseline 1: zero-shot Whisper-small.en (evaluation only)
+  uv run python training/evaluate.py --model openai/whisper-small.en --dataset real \
+      --out reports/zero_shot_small_en.json
+
+  # Baseline 2: real-only fine-tuning
+  uv run python training/finetune_whisper.py --real-only \
+      --model openai/whisper-small.en --out runs/whisper_real_only \
+      --epochs 3 --batch-size 16 --fp16
+
+  # Regime 1: synthetic-only fine-tuning
+  uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl \
+      --model openai/whisper-small.en --out runs/whisper_synthetic_only \
+      --epochs 3 --batch-size 16 --fp16
+
+  # Regime 2: synthetic first, then real last
+  uv run python training/finetune_whisper.py --manifest data/train_v1/manifest.jsonl \
+      --curriculum --model openai/whisper-small.en --out runs/whisper_curriculum \
+      --epochs 3 --batch-size 16 --fp16
+
+Pass ``--real-manifest path/to/manifest.jsonl`` to use local labeled real data
+instead of the public real training split. Both manifest flags may be repeated.
+``--mix-real`` remains the joint shuffled ~1:1 alternative to curriculum.
 """
 
 import argparse
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any, Sequence
 
 import torch
 from transformers import (
@@ -42,26 +63,77 @@ class Collator:
         return batch
 
 
+@dataclass(frozen=True)
+class TrainingPhase:
+    name: str
+    dataset: Any
+
+
+def curriculum_phases(synthetic: Any, real: Any) -> list[TrainingPhase]:
+    """Return the fixed sequential order: all synthetic, then all real."""
+    if synthetic is None or real is None:
+        raise ValueError("curriculum requires both synthetic and real datasets")
+    return [TrainingPhase("synthetic", synthetic), TrainingPhase("real", real)]
+
+
+def _load_manifest_set(paths: Sequence[str]):
+    from datasets import concatenate_datasets
+
+    datasets = [load_manifest(path).select_columns(["audio", "text"]) for path in paths]
+    return datasets[0] if len(datasets) == 1 else concatenate_datasets(datasets)
+
+
+def _load_real_train(paths: Sequence[str] | None):
+    if paths:
+        return _load_manifest_set(paths)
+    return load_real_atc(split="train").select_columns(["audio", "text"])
+
+
+def _mix_one_to_one(synthetic, real):
+    from datasets import concatenate_datasets
+
+    # Upsample real to approximately 1:1 with synthetic. The final partial
+    # excess is retained, matching the original joint-mixing behavior.
+    reps = max(1, round(len(synthetic) / len(real)))
+    return concatenate_datasets([synthetic] + [real] * reps).shuffle(seed=0)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--manifest", required=True, help="synthetic manifest.jsonl")
-    ap.add_argument("--mix-real", action="store_true",
-                    help="mix in the real ATC train split (jacktol/atc-dataset), upsampled "
-                         "to ~1:1 with synthetic (recommended; synthetic-only underperforms)")
+    ap.add_argument("--manifest", action="append", default=[],
+                    help="synthetic manifest.jsonl; repeat for multiple synthetic sets")
+    ap.add_argument("--real-manifest", action="append", default=[],
+                    help="local labeled-real manifest; repeat to combine (default: public train split)")
+    regime = ap.add_mutually_exclusive_group()
+    regime.add_argument("--mix-real", action="store_true",
+                        help="jointly mix real ATC training data at approximately 1:1")
+    regime.add_argument("--curriculum", action="store_true",
+                        help="train sequentially on synthetic manifest(s), then real data")
+    regime.add_argument("--real-only", action="store_true",
+                        help="train the real-only Tier 3 baseline")
     ap.add_argument("--eval-set", choices=["real", "holdout"], default="real",
-                    help="'real' = real ATC test split (default); 'holdout' = slice of the "
-                         "synthetic set (offline, but only measures synthetic fit)")
+                    help="'real' = public real test split; 'holdout' = synthetic (or real-only) slice")
     ap.add_argument("--eval-samples", type=int, default=200,
                     help="max real eval samples when --eval-set real")
     ap.add_argument("--model", default="openai/whisper-small.en")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--epochs", type=int, default=3)
-    ap.add_argument("--max-steps", type=int, default=-1)
+    ap.add_argument("--epochs", type=int, default=3,
+                    help="epochs per phase (applies independently to both curriculum phases)")
+    ap.add_argument("--max-steps", type=int, default=-1,
+                    help="maximum steps per phase; -1 uses --epochs")
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--fp16", action="store_true")
     ap.add_argument("--eval-holdout", type=float, default=0.02)
     args = ap.parse_args()
+
+    if args.real_only:
+        if args.manifest:
+            ap.error("--real-only cannot be combined with --manifest")
+    elif not args.manifest:
+        ap.error("--manifest is required unless --real-only is selected")
+    if args.real_manifest and not (args.real_only or args.mix_real or args.curriculum):
+        ap.error("--real-manifest requires --real-only, --mix-real, or --curriculum")
 
     processor = WhisperProcessor.from_pretrained(args.model)
     model = WhisperForConditionalGeneration.from_pretrained(args.model)
@@ -69,15 +141,32 @@ def main():
     model.config.suppress_tokens = []
     model.config.use_cache = False
 
-    ds = load_manifest(args.manifest)
-    if args.mix_real:
-        from datasets import concatenate_datasets
-        real = load_real_atc(split="train").select_columns(["audio", "text"])
-        # upsample real to ~1:1 with synthetic — the ratio the synthetic-ATC
-        # literature found optimal; beyond ~2:1 synthetic hurts
-        reps = max(1, round(len(ds) / len(real)))
-        ds = concatenate_datasets([ds.select_columns(["audio", "text"])] + [real] * reps)
-        ds = ds.shuffle(seed=0)
+    synthetic = _load_manifest_set(args.manifest) if args.manifest else None
+    needs_real = args.real_only or args.mix_real or args.curriculum
+    real = _load_real_train(args.real_manifest) if needs_real else None
+
+    if args.eval_set == "real":
+        eval_raw = load_real_atc(split="test")
+        eval_raw = eval_raw.select(range(min(args.eval_samples, len(eval_raw))))
+    else:
+        holdout_source = real if args.real_only else synthetic
+        split = holdout_source.train_test_split(
+            test_size=max(args.eval_holdout, 1 / max(len(holdout_source), 2)), seed=0
+        )
+        if args.real_only:
+            real = split["train"]
+        else:
+            synthetic = split["train"]
+        eval_raw = split["test"]
+
+    if args.real_only:
+        phases = [TrainingPhase("real", real)]
+    elif args.curriculum:
+        phases = curriculum_phases(synthetic, real)
+    elif args.mix_real:
+        phases = [TrainingPhase("joint", _mix_one_to_one(synthetic, real))]
+    else:
+        phases = [TrainingPhase("synthetic", synthetic)]
 
     def prepare(ex):
         audio = ex["audio"]
@@ -87,18 +176,21 @@ def main():
         ex["labels"] = processor.tokenizer(ex["text"]).input_ids
         return ex
 
-    ds = ds.map(prepare, remove_columns=ds.column_names, desc="extracting features")
-    if args.eval_set == "real":
-        train_ds = ds
-        eval_raw = load_real_atc(split="test")
-        eval_raw = eval_raw.select(range(min(args.eval_samples, len(eval_raw))))
-        eval_ds = eval_raw.map(prepare, remove_columns=eval_raw.column_names,
-                               desc="extracting eval features")
-    else:
-        split = ds.train_test_split(test_size=max(args.eval_holdout, 1 / max(len(ds), 2)), seed=0)
-        train_ds, eval_ds = split["train"], split["test"]
+    eval_ds = eval_raw.map(prepare, remove_columns=eval_raw.column_names,
+                           desc="extracting eval features")
+    prepared_phases = [
+        TrainingPhase(
+            phase.name,
+            phase.dataset.map(
+                prepare,
+                remove_columns=phase.dataset.column_names,
+                desc=f"extracting {phase.name} features",
+            ),
+        )
+        for phase in phases
+    ]
 
-    training_args = Seq2SeqTrainingArguments(
+    base_training_args = Seq2SeqTrainingArguments(
         output_dir=args.out,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
@@ -114,14 +206,21 @@ def main():
         remove_unused_columns=False,
     )
 
-    trainer = Seq2SeqTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        data_collator=Collator(processor),
-    )
-    trainer.train()
+    trainer = None
+    for index, phase in enumerate(prepared_phases, start=1):
+        phase_out = (Path(args.out) / f"phase_{index}_{phase.name}"
+                     if len(prepared_phases) > 1 else Path(args.out))
+        training_args = replace(base_training_args, output_dir=str(phase_out))
+        trainer = Seq2SeqTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=phase.dataset,
+            eval_dataset=eval_ds,
+            data_collator=Collator(processor),
+        )
+        print(f"starting {phase.name} phase ({index}/{len(prepared_phases)})")
+        trainer.train()
+
     trainer.save_model(args.out)
     processor.save_pretrained(args.out)
     print(f"saved fine-tuned model to {args.out}")
