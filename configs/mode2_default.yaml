@@ -45,6 +45,26 @@ tts:
     - bm_lewis
   speed: {uniform: [1.0, 1.4]}
 
+# Left identical to mode1_matched.yaml on purpose: the two profiles exist to be
+# compared, and diverging here would confound every Mode 1 vs Mode 2 result.
+#
+# It is not free, though. Measured on 200 clips of identical cached TTS pushed
+# through each channel, WavLM KID against data/real/calibration:
+#
+#                          mode 2      mode 1 matched
+#   no voice augment       0.00257     0.00295
+#   + voice augment        0.00661     0.00405
+#
+# The cost is `pitch_semitones`, not `eq_tilt_db` as one might guess: dropping
+# pitch alone recovers 0.00661 -> 0.00304, dropping eq_tilt alone changes
+# nothing (0.00669), and dropping pitch+tempo returns to the un-augmented
+# 0.00257. Pitch shifting leaves resampling artifacts that WavLM's low layers
+# read easily, and it costs Mode 2 (2.6x) more than Mode 1 (1.4x) because a
+# better-matched channel masks less of them.
+#
+# Not changed here unilaterally: pitch variation buys speaker diversity for the
+# downstream ASR task, and that trade belongs to whoever owns Tier 3, not to a
+# channel profile. Flagged for P3.
 voice_augment:
   pitch_semitones: {prob: 0.5, uniform: [-2, 2]}
   tempo: {prob: 0.3, uniform: [0.95, 1.05]}
