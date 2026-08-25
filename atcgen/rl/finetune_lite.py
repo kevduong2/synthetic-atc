@@ -17,6 +17,8 @@ label id), and the redundant leading start-of-transcript column that
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import torch
 from torch.optim import AdamW
@@ -89,8 +91,9 @@ def finetune(model, features: list[Feature], *, steps: int, batch_size: int, lr:
     order = rng.permutation(n)
     cursor = 0
     losses: list[float] = []
+    t_start = time.monotonic()
 
-    for _ in range(steps):
+    for step in range(steps):
         if cursor + batch_size > n:
             order = rng.permutation(n)
             cursor = 0
@@ -108,6 +111,11 @@ def finetune(model, features: list[Feature], *, steps: int, batch_size: int, lr:
         optimizer.step()
         scheduler.step()
         losses.append(float(loss.detach().cpu()))
+        if (step + 1) % 100 == 0 or step + 1 == steps:
+            rate = (step + 1) / max(time.monotonic() - t_start, 1e-6)
+            recent = sum(losses[-100:]) / len(losses[-100:])
+            print(f"[finetune] step {step + 1}/{steps} loss {recent:.3f} "
+                  f"{rate:.2f} steps/s", flush=True)
 
     model._ft_losses = losses
     return model

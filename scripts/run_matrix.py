@@ -21,6 +21,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -191,6 +192,10 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--arms", default=",".join(SFT_ARMS),
                     help="comma-separated subset of arms to train")
+    ap.add_argument("--arm-workers", type=int, default=5,
+                    help="concurrent training arms (independent; share MPS)")
+    ap.add_argument("--eval-workers", type=int, default=3,
+                    help="concurrent evaluation subprocesses")
     ap.add_argument("--skip-final", action="store_true",
                     help="stop before the locked_test reads")
     args = ap.parse_args()
@@ -206,16 +211,23 @@ def main():
     gated = stage_gate(pool, log_dir / "gate.log")
     selected = stage_select(pool, gated)
 
-    arm_runs = {}
-    for name in args.arms.split(","):
-        arm_runs[name] = stage_arm(name, SFT_ARMS[name], out, args, pool, selected, log_dir)
+    # arms are independent -> run them concurrently; MPS serializes kernels but
+    # aggregate throughput beats sequential on Apple Silicon (unified memory).
+    arm_names = args.arms.split(",")
+    with ThreadPoolExecutor(max_workers=args.arm_workers) as pool_exec:
+        futures = {name: pool_exec.submit(stage_arm, name, SFT_ARMS[name], out,
+                                          args, pool, selected, log_dir)
+                   for name in arm_names}
+        arm_runs = {name: future.result() for name, future in futures.items()}
 
     # model-selection reads (tuning-legal split)
-    dev_reports = {"a0_zero_shot": stage_eval("a0_zero_shot", args.model,
-                                              "model_select", out, log_dir)}
-    for name, run in arm_runs.items():
-        dev_reports[name] = stage_eval(name, run["final_checkpoint"], "model_select",
-                                       out, log_dir)
+    with ThreadPoolExecutor(max_workers=args.eval_workers) as pool_exec:
+        futures = {"a0_zero_shot": pool_exec.submit(
+            stage_eval, "a0_zero_shot", args.model, "model_select", out, log_dir)}
+        for name, run in arm_runs.items():
+            futures[name] = pool_exec.submit(stage_eval, name, run["final_checkpoint"],
+                                             "model_select", out, log_dir)
+        dev_reports = {tag: future.result() for tag, future in futures.items()}
     dev_summary = summarize(out, dev_reports, "model_select")
     (out / "summary_model_select.json").write_text(json.dumps(dev_summary, indent=2) + "\n")
     print(json.dumps(dev_summary["arms"], indent=2))
@@ -226,11 +238,13 @@ def main():
         return
 
     # the one locked_test read per arm (D11)
-    final_reports = {"a0_zero_shot": stage_eval("a0_zero_shot", args.model,
-                                                "locked_test", out, log_dir)}
-    for name, run in arm_runs.items():
-        final_reports[name] = stage_eval(name, run["final_checkpoint"], "locked_test",
-                                         out, log_dir)
+    with ThreadPoolExecutor(max_workers=args.eval_workers) as pool_exec:
+        futures = {"a0_zero_shot": pool_exec.submit(
+            stage_eval, "a0_zero_shot", args.model, "locked_test", out, log_dir)}
+        for name, run in arm_runs.items():
+            futures[name] = pool_exec.submit(stage_eval, name, run["final_checkpoint"],
+                                             "locked_test", out, log_dir)
+        final_reports = {tag: future.result() for tag, future in futures.items()}
     final_summary = summarize(out, final_reports, "locked_test")
     (out / "summary_locked_test.json").write_text(json.dumps(final_summary, indent=2) + "\n")
     print(json.dumps(final_summary, indent=2))
