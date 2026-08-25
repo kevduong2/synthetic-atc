@@ -1123,7 +1123,7 @@
       <text x="85"  y="174" text-anchor="middle" class="sv-m sv-mut">(rl_verify)</text>
       <text x="410" y="158" text-anchor="middle" class="sv-b" style="fill: var(--rej)">locked_test [500:2500]</text>
       <text x="410" y="174" text-anchor="middle" class="sv-m" style="fill: var(--rej)">read once per arm, at the very end</text>
-      <text x="20" y="204" class="sv-m sv-mut">reward-val feeds L3 + GRPO dev · model-select picks checkpoints · locked_test decides — no split touches anything upstream of its role</text>
+      <text x="20" y="204" class="sv-m sv-mut">reward-val feeds L3 · model-select picks checkpoints + GRPO dev · locked_test decides — no split touches anything upstream of its role</text>
     </svg>
     <figcaption>Deterministic disjoint slices pinned by <span class="mono">atcgen/dataset/splits.py</span>
     (disjointness is asserted at import time). jacktol is utterance-segmented, so speaker/callsign

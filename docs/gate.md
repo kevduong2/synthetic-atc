@@ -172,9 +172,12 @@ that row. This allows a rejected or selected row to be traced without relying
 on a separate run directory.
 
 `load_gated` reads `manifest_gated.jsonl` from a path or directory. It does not
-run inference. `retier` re-applies new `GateConfig` thresholds to already
-stored raw hypotheses and audio/entity blobs, so threshold sweeps do not call
-the teachers again. It returns rows with updated `tier` and `gate` blobs.
+run inference. `retier` re-applies new `GateConfig` WER, entity, and noise
+thresholds to the stored raw hypotheses, so those threshold sweeps do not call
+the teachers again. It passes the stored audio-check verdict through unchanged:
+duration, RMS, clipping, and repeat thresholds are not re-evaluated. Changing
+those audio QC thresholds requires re-running `audio_checks` on the WAVs. It
+returns rows with updated `tier` and `gate` blobs.
 
 `select_tiers` accepts rows or a gated manifest and defaults to `("gold",)`.
 It validates tier names, preserves manifest order, and filters to the requested
