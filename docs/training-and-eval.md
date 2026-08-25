@@ -217,10 +217,11 @@ stages are skipped when their output artifact exists. Arm output is
 `arms/<name>/run.json`; eval output is `eval/<tag>_<split>.json` plus the
 paired hypotheses JSONL.
 
-The matrix CLI exposes `--arm-workers` (default 5) and `--eval-workers`
-(default 3) for concurrent subprocesses. MPS wired memory can panic the
-machine with several Whisper trainers; use at most two concurrent workers,
-and see [known-issues.md](known-issues.md) before running a matrix.
+The matrix CLI exposes `--arm-workers` (default 2) and `--eval-workers`
+(default 3) for concurrent subprocesses. The default of two arm workers is
+intended to be safe on MPS; raising `--arm-workers` above two can exhaust MPS
+memory and panic the machine on unified-memory Macs. See
+[known-issues.md](known-issues.md) before running a matrix.
 Other matrix controls include `--out`, `--model`, `--config`, `--text`,
 `--n-synth`, `--gen-seed`, `--sft-steps`, `--sft-batch`, `--sft-lr`,
 `--mix-ratio`, `--grpo-steps`, `--grpo-lr`, `--seed`, `--arms`, and

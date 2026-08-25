@@ -192,8 +192,10 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--arms", default=",".join(SFT_ARMS),
                     help="comma-separated subset of arms to train")
-    ap.add_argument("--arm-workers", type=int, default=5,
-                    help="concurrent training arms (independent; share MPS)")
+    ap.add_argument("--arm-workers", type=int, default=2,
+                    help="concurrent training arms (independent; share MPS; "
+                         ">2 concurrent whisper trainers can wire enough MPS "
+                         "memory to panic a 36GB machine)")
     ap.add_argument("--eval-workers", type=int, default=3,
                     help="concurrent evaluation subprocesses")
     ap.add_argument("--skip-final", action="store_true",

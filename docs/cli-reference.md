@@ -381,7 +381,7 @@ model selection, locked-test evaluation, and paired summaries.
 | `--grpo-steps` / `--grpo-lr` | `600` / `2e-06` | GRPO budget. |
 | `--seed` | `0` | Training seed. |
 | `--arms` | `a1_real,a2_synth_gated,a2u_synth_ungated,a3_mix,a4_mix_grpo` | Comma-separated arm subset. |
-| `--arm-workers` | `5` | Concurrent training arms. |
+| `--arm-workers` | `2` | Concurrent training arms. |
 | `--eval-workers` | `3` | Concurrent evaluation subprocesses. |
 | `--skip-final` | `false` | Stop before the `locked_test` reads. |
 
@@ -396,9 +396,9 @@ The run writes `matrix_config.json`, `synth_pool/` with the raw, gated, and
 selected manifests, `arms/<arm>/` checkpoints and `run.json` files,
 `eval/` reports and hypothesis JSONL files, `summary_model_select.json`,
 `summary_locked_test.json`, and `logs/`. On MPS, concurrent Whisper trainers
-share unified memory; the default `--arm-workers 5` can exceed available
-memory. Use conservative worker counts such as `1` and see
-[known-issues.md](known-issues.md) before running a matrix.
+share unified memory; the default `--arm-workers 2` is the safe setting. Raising
+it above `2` risks MPS memory exhaustion or a kernel panic on unified-memory
+Macs. See [known-issues.md](known-issues.md) before running a matrix.
 
 ## RL
 
