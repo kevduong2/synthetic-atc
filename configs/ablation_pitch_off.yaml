@@ -11,6 +11,10 @@
 # transmit/path-side and repeats per hop; cochannel_mix onward is RECEIVER_END
 # (the co-channel sum arriving at the antenna, then AGC, squelch, gate artifacts
 # and the delivery codec).
+#
+# Kept byte-identical to mode1_wide.yaml apart from `voice_augment.pitch_semitones`
+# — that is the whole point of the arm — so P4's `reapply_bandpass` and re-fitted
+# cascade corners are carried over here too.
 
 mode: procedural
 seed: 0
@@ -18,7 +22,9 @@ seed: 0
 output:
   sample_rate: 16000
   format: wav
+  loudness_mode: rms
   loudness_db: {uniform: [-25, -18]}
+  loudness_lufs: -23.0
 
 tts:
   voices:
@@ -56,6 +62,7 @@ dataset:
 channel:
   profile: wide
   clean_arm_prob: 0.07
+  reapply_bandpass: true
   chain:
     # -- talker ------------------------------------------------------------
     - primitive: mic_coloration
@@ -77,7 +84,7 @@ channel:
       narrow_sr: {choice: [4000, 5000, 6000]}
     - primitive: bandpass
       prob: 1.0
-      low: {uniform: [200, 400]}
+      low: {uniform: [130, 400]}
       high: {uniform: [2300, 3600]}
     - primitive: agc_wander
       prob: 0.6

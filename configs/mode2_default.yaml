@@ -26,7 +26,11 @@ seed: 0
 output:
   sample_rate: 16000
   format: wav
+  # Identical to mode1_matched.yaml, like everything else outside `calibrated:`.
+  # `lufs` would target loudness_lufs through EBU R128 instead; still rms here.
+  loudness_mode: rms
   loudness_db: {uniform: [-25, -20]}
+  loudness_lufs: -23.0
 
 tts:
   voices:
@@ -101,6 +105,12 @@ calibrated:
   # Effects the fitted chain cannot produce, because they are events rather than
   # stationary channel properties. Probabilities follow `mode1_matched.yaml`,
   # which was tuned against these same clips, except `gated_floor_prob`.
+  #
+  # There is no `reapply_bandpass` knob here because this backend already does
+  # the equivalent, and did from the start: a preset's fitted FIR *is* the
+  # receiver's filter, squelch clicks are added through a unit-gain copy of it
+  # (`_band_limited`), and dropouts are ramped rather than rectangular. Mode 1's
+  # flag is how the procedural chain catches up (03 §4.3).
   post_effects:
     squelch:
       prob: 0.8

@@ -13,10 +13,12 @@ streaming sources keep being asked for one utterance at a time.
 
 import json
 import random
+from dataclasses import fields
 from pathlib import Path
 from typing import Protocol
 
-from .grammar import Utterance, generate_utterance
+from ..entities import Entity, check_entity, entities_from_dicts
+from .grammar import ScenarioConfig, Utterance, generate_utterance, load_vocab
 
 DEFAULT_CATEGORY = "routine"
 
@@ -26,19 +28,48 @@ class TextSource(Protocol):
 
 
 class GrammarTextSource:
-    """Built-in FAA/ICAO phraseology grammar."""
+    """Built-in FAA/ICAO phraseology grammar.
+
+    Scenario knobs (region, readback errors, confusable callsigns, phonetic
+    respelling) come from a `ScenarioConfig`; keyword arguments override its
+    fields, so `GrammarTextSource(region="eu")` is enough for the common case.
+    """
+
+    def __init__(self, config: ScenarioConfig | None = None, **knobs):
+        self.config = _with_knobs(config or ScenarioConfig(), knobs)
+        self.vocab = load_vocab(self.config.vocab_path)
 
     def sample(self, rng: random.Random) -> Utterance:
-        return generate_utterance(rng)
+        return generate_utterance(rng, self.config, self.vocab)
+
+
+def _with_knobs(config: ScenarioConfig, knobs: dict) -> ScenarioConfig:
+    """Override `config` fields, coercing strings to the declared types."""
+    if not knobs:
+        return config
+    types = {field.name: field.type for field in fields(ScenarioConfig)}
+    values = {field.name: getattr(config, field.name) for field in fields(ScenarioConfig)}
+    for name, value in knobs.items():
+        if name not in types:
+            raise ValueError(f"unknown scenario knob {name!r}; "
+                             f"expected one of {sorted(types)}")
+        if isinstance(value, str) and name.endswith("_prob"):
+            value = float(value)
+        elif isinstance(value, str) and name == "max_retries":
+            value = int(value)
+        values[name] = value
+    return ScenarioConfig(**values)
 
 
 class JsonlTextSource:
     """Reads utterances from a JSONL file produced by any external script.
 
     Each line: {"spoken": str, "transcript": str, "role"?: str, "kind"?: str,
-    "weight"?: float, "category"?: str} or simply {"text": str}. Sampled
-    uniformly with replacement unless the builder wraps it in a
-    `WeightedSampler`.
+    "weight"?: float, "category"?: str, "entities"?: list[dict],
+    "display"?: str} or simply {"text": str}. Entities, when present, are
+    validated against `atcgen.entities` -- an external generator that ships
+    labels has to ship legal ones. Sampled uniformly with replacement unless
+    the builder wraps it in a `WeightedSampler`.
     """
 
     def __init__(self, path: str | Path):
@@ -64,6 +95,8 @@ class JsonlTextSource:
                     kind=obj.get("kind", "external"),
                     weight=float(weight),
                     category=obj.get("category", DEFAULT_CATEGORY),
+                    entities=_read_entities(obj.get("entities"), line),
+                    display=obj.get("display", ""),
                 ))
         if not self.records:
             raise ValueError(f"no utterances found in {path}")
@@ -149,8 +182,47 @@ def _cumulative(weights: list[float]) -> list[float]:
     return out if total > 0 else [float(i + 1) for i in range(len(weights))]
 
 
-def make_text_source(spec: str) -> TextSource:
-    """'grammar' -> built-in; anything else is treated as a JSONL path."""
+def _read_entities(raw, line: str) -> list[Entity]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"'entities' must be a list: {line[:80]}")
+    entities = entities_from_dicts(raw)
+    for entity in entities:
+        problem = check_entity(entity)
+        if problem:
+            raise ValueError(f"{problem}: {line[:80]}")
+    return entities
+
+
+def make_text_source(spec: str | dict | None) -> TextSource:
+    """Build a text source from a spec.
+
+    * ``"grammar"`` -- the built-in grammar with default scenario knobs.
+    * ``"grammar:region=eu,readback_error_prob=0.1"`` -- knobs inline.
+    * ``{"kind": "grammar", "region": "eu"}`` -- the same, as a dict.
+    * anything else -- a path to a JSONL file.
+    """
+    if spec is None:
+        return GrammarTextSource()
+    if isinstance(spec, dict):
+        knobs = dict(spec)
+        kind = knobs.pop("kind", "grammar")
+        if kind == "grammar":
+            return GrammarTextSource(**knobs)
+        if kind == "jsonl":
+            return JsonlTextSource(knobs["path"])
+        raise ValueError(f"unknown text source kind: {kind!r}")
     if spec == "grammar":
         return GrammarTextSource()
+    if spec.startswith("grammar:"):
+        knobs = {}
+        for item in spec.split(":", 1)[1].split(","):
+            if not item.strip():
+                continue
+            name, _, value = item.partition("=")
+            if not _:
+                raise ValueError(f"grammar knob needs 'name=value': {item!r}")
+            knobs[name.strip()] = value.strip()
+        return GrammarTextSource(**knobs)
     return JsonlTextSource(spec)

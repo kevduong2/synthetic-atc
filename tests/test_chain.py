@@ -3,9 +3,9 @@ import random
 import numpy as np
 import pytest
 
-from atcgen.channel.chain import (HOP2_SNR_DB, PAD_SEC, RECEIVER_END,
-                                  SOURCE_ONCE, ChannelRecord, ProceduralChannel,
-                                  UtteranceMeta, mild_chain)
+from atcgen.channel.chain import (BAND_SPLATTER, HOP2_SNR_DB, PAD_SEC,
+                                  RECEIVER_END, SOURCE_ONCE, ChannelRecord,
+                                  ProceduralChannel, UtteranceMeta, mild_chain)
 from atcgen.channel.primitives import TARGET_SR
 from atcgen.config import ChainStep, DistSpec, load_config
 
@@ -23,6 +23,15 @@ def _channel(**kwargs):
 
 def _step(primitive, prob=1.0, **params):
     return ChainStep(primitive, prob, {k: DistSpec.parse(v) for k, v in params.items()})
+
+
+def _declared(record):
+    """Applied steps that came from the config, without the bandpass re-applications."""
+    return [s["primitive"] for s in record.steps if "reapply" not in s]
+
+
+def _reapplied(record):
+    return [s for s in record.steps if "reapply" in s]
 
 
 def test_output_sr_range_and_padding():
@@ -48,8 +57,8 @@ def test_record_lists_applied_steps_in_chain_order():
     sim = _channel()
     _, rec = sim(_tone(), 24000, random.Random(0))
     declared = [s.primitive for s in sim.steps]
-    applied = rec.applied()
-    assert set(applied) <= set(declared)
+    applied = _declared(rec)
+    assert set(rec.applied()) <= set(declared)
     assert applied == sorted(applied, key=declared.index)
     assert "bandpass" in applied and "additive_noise" in applied
     assert rec.hops == 1 and rec.clean_arm is False
@@ -85,8 +94,8 @@ def test_double_hop_runs_transmit_path_twice_and_receiver_once():
     for step in rec2.steps:
         if step["primitive"] in RECEIVER_END:
             assert step["hop"] == 0          # receiver end runs once, after the hops
-    hop_counts = [sum(s["primitive"] == "bandpass" and s["hop"] == h for s in rec2.steps)
-                  for h in (0, 1)]
+    hop_counts = [sum(s["primitive"] == "bandpass" and s["hop"] == h
+                      and "reapply" not in s for s in rec2.steps) for h in (0, 1)]
     assert hop_counts == [1, 1]
 
 
@@ -107,7 +116,7 @@ def test_source_stage_runs_once_and_first_whatever_the_hop_count():
              _step("squelch_gate", floor_db=-40.0, tail_burst_prob=0.0)]
     sim = ProceduralChannel(steps)
     _, rec = sim(_tone(), 24000, random.Random(0), hops=2)
-    applied = rec.applied()
+    applied = _declared(rec)
     assert [s for s in applied if s in SOURCE_ONCE] == ["mic_coloration", "ptt_truncation"]
     assert applied[:2] == ["mic_coloration", "ptt_truncation"]     # before any hop
     assert all(s["hop"] == 0 for s in rec.steps if s["primitive"] in SOURCE_ONCE)
@@ -135,6 +144,97 @@ def test_bandpass_removes_out_of_band_energy_through_the_chain():
     low, _ = sim(_tone(f=100), 24000, random.Random(4))
     mid, _ = sim(_tone(f=1000), 24000, random.Random(4))
     assert np.mean(mid ** 2) > 10 * np.mean(low ** 2)
+
+
+def _band_power(x, lo, hi, sr=TARGET_SR):
+    spec = np.abs(np.fft.rfft(x.astype(np.float64))) ** 2
+    freqs = np.fft.rfftfreq(len(x), 1.0 / sr)
+    return float(spec[(freqs >= lo) & (freqs < hi)].sum())
+
+
+def test_reapplied_bandpass_removes_what_the_noise_puts_out_of_band():
+    """The receiver front end filters the static and crackle it is handed."""
+    steps = [_step("bandpass", low=300.0, high=3000.0),
+             _step("additive_noise", snr_db=3.0, color="white"),
+             _step("crackle", rate=8.0)]
+    on, off = ProceduralChannel(steps), ProceduralChannel(steps, reapply_bandpass=False)
+    for seed in range(5):
+        kept, rec = on(_tone(f=1000), 24000, random.Random(seed))
+        raw, raw_rec = off(_tone(f=1000), 24000, random.Random(seed))
+        assert [s["reapply"] for s in _reapplied(rec)] == ["chain_end"]
+        assert _reapplied(raw_rec) == []
+        assert _band_power(kept, 3600, 8000) < 0.05 * _band_power(raw, 3600, 8000)
+        # ... while the passband is left alone
+        assert _band_power(kept, 500, 2500) > 0.5 * _band_power(raw, 500, 2500)
+
+
+def test_reapplication_reuses_the_drawn_cutoffs():
+    """One link, one passband: the re-application never re-draws the filter."""
+    sim = ProceduralChannel([_step("bandpass", low={"uniform": [200, 400]},
+                                   high={"uniform": [2400, 3400]}),
+                             _step("additive_noise", snr_db=10.0)])
+    for seed in range(10):
+        _, rec = sim(_tone(), 24000, random.Random(seed))
+        drawn = next(s for s in rec.steps if "reapply" not in s
+                     and s["primitive"] == "bandpass")
+        assert [(s["low"], s["high"]) for s in _reapplied(rec)] == [
+            (drawn["low"], drawn["high"])]
+
+
+def test_cochannel_is_filtered_before_the_receiver_stage():
+    """RF-side: the co-channel sum arrives at the antenna, ahead of the filter."""
+    steps = [_step("bandpass", low=300.0, high=3000.0),
+             _step("cochannel_mix", level=0.5),
+             _step("agc_attack", surge_db=6.0),
+             _step("codec_roundtrip", bitrate_kbps=64)]
+    other = np.random.default_rng(0).standard_normal(TARGET_SR).astype(np.float32) * 0.3
+    _, rec = ProceduralChannel(steps)(_tone(), 24000, random.Random(1),
+                                      interference=other)
+    assert [(s["primitive"], s.get("reapply")) for s in rec.steps] == [
+        ("bandpass", None), ("cochannel_mix", None),
+        ("bandpass", "before:agc_attack"), ("agc_attack", None),
+        ("codec_roundtrip", None)]
+
+
+def test_squelch_artifacts_are_filtered_before_the_codec():
+    """Audio-stage: the gate's own noise is downstream of the receiver filter."""
+    steps = [_step("bandpass", low=300.0, high=3000.0),
+             _step("squelch_gate", floor_db=-40.0, tail_burst_prob=1.0),
+             _step("squelch_clicks"),
+             _step("codec_roundtrip", bitrate_kbps=64)]
+    _, rec = ProceduralChannel(steps)(_tone(), 24000, random.Random(2))
+    assert [(s["primitive"], s.get("reapply")) for s in rec.steps] == [
+        ("bandpass", None), ("squelch_gate", None), ("squelch_clicks", None),
+        ("bandpass", "before:codec_roundtrip"), ("codec_roundtrip", None)]
+
+
+def test_relay_hop_filters_at_the_hop_boundary():
+    """Every hop's receiver filters before the next transmitter re-keys it."""
+    steps = [_step("bandpass", low=300.0, high=3000.0), _step("additive_noise", snr_db=8.0)]
+    _, rec = ProceduralChannel(steps)(_tone(), 24000, random.Random(3), hops=2)
+    assert [(s["hop"], s["reapply"]) for s in _reapplied(rec)] == [(0, "relay"),
+                                                                  (0, "chain_end")]
+
+
+def test_every_splatter_step_is_followed_by_a_filter_in_the_real_profiles():
+    """The guarantee: nothing that leaves the band is the last word on the clip."""
+    for profile in ("matched", "wide"):
+        sim = ProceduralChannel.from_config(
+            load_config(f"configs/mode1_{profile}.yaml").channel)
+        for seed in range(15):
+            _, rec = sim(_tone(sec=2.0), 24000, random.Random(seed),
+                         UtteranceMeta(role="pilot"), hops=2)
+            splatter = [i for i, s in enumerate(rec.steps)
+                        if s["primitive"] in BAND_SPLATTER]
+            if not splatter:
+                continue
+            assert any(s["primitive"] == "bandpass" for s in rec.steps[splatter[-1] + 1:])
+
+
+def test_reapply_bandpass_is_a_config_field_defaulting_on():
+    assert load_config(CONFIG).channel.reapply_bandpass is True
+    assert ProceduralChannel.from_config(
+        load_config(CONFIG).channel).reapply_bandpass is True
 
 
 def test_noise_floor_fills_the_padding_at_low_snr():

@@ -1,10 +1,24 @@
+# The pre-P2 starting profile: a plain chain with no fitting behind it, kept as
+# the default because it is the simplest thing that runs. `mode1_matched.yaml`
+# (fitted to the local receiver) and `mode1_wide.yaml` (domain randomization)
+# are the profiles to generate training data from.
+#
+# Its ranges predate the real-corpus measurements, and
+# `python -m atcgen.channel.envelope --config configs/mode1_default.yaml` says so
+# — the bandpass corners sit outside the measured envelope in both directions.
+# Deliberately not re-fitted: what this profile is for is being unopinionated.
+
 mode: procedural
 seed: 0
 
 output:
   sample_rate: 16000
   format: wav
+  # rms targets loudness_db, lufs targets loudness_lufs (EBU R128, see
+  # atcgen/channel/loudness.py). rms is what the build stage honours today.
+  loudness_mode: rms
   loudness_db: {uniform: [-23, -17]}
+  loudness_lufs: -23.0
 
 tts:
   voices:
@@ -50,6 +64,8 @@ qc:
 channel:
   profile: default
   clean_arm_prob: 0.0
+  # physics, on everywhere: see atcgen/channel/chain.py's module docstring
+  reapply_bandpass: true
   chain:
     - primitive: narrowband_roundtrip
       prob: 1.0

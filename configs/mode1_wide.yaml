@@ -10,6 +10,16 @@
 # transmit/path-side and repeats per hop; cochannel_mix onward is RECEIVER_END
 # (the co-channel sum arriving at the antenna, then AGC, squelch, gate artifacts
 # and the delivery codec).
+#
+# `reapply_bandpass` (P4, on everywhere) re-runs the drawn filter wherever the
+# signal crosses a real one — see atcgen/channel/chain.py. It makes `bandpass`
+# a *cascade* corner rather than a single filter's, which is why the low corner
+# now starts at 130 Hz: `matched` re-fitted to 130-250 / 3200-3400 against the
+# real set, and `wide` is by construction the union that contains it.
+#
+# This profile is the one that deliberately randomizes past the measured real
+# envelope; `python -m atcgen.channel.envelope --config configs/mode1_wide.yaml`
+# quantifies by how much, and is expected to report findings here.
 
 mode: procedural
 seed: 0
@@ -17,7 +27,11 @@ seed: 0
 output:
   sample_rate: 16000
   format: wav
+  # rms targets loudness_db, lufs targets loudness_lufs (EBU R128). See
+  # mode1_matched.yaml's header; rms stays the default until that experiment runs.
+  loudness_mode: rms
   loudness_db: {uniform: [-25, -18]}
+  loudness_lufs: -23.0
 
 tts:
   voices:
@@ -55,6 +69,7 @@ dataset:
 channel:
   profile: wide
   clean_arm_prob: 0.07
+  reapply_bandpass: true
   chain:
     # -- talker ------------------------------------------------------------
     - primitive: mic_coloration
@@ -76,7 +91,9 @@ channel:
       narrow_sr: {choice: [4000, 5000, 6000]}
     - primitive: bandpass
       prob: 1.0
-      low: {uniform: [200, 400]}
+      # cascade corners (see the header): the union of the literature values and
+      # matched's re-fitted 130-250 / 3200-3400
+      low: {uniform: [130, 400]}
       high: {uniform: [2300, 3600]}
     - primitive: agc_wander
       prob: 0.6

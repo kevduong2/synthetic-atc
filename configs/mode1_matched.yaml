@@ -4,8 +4,9 @@
 # This is the fair DSP baseline for Mode 2 comparisons and the profile to use
 # when targeting our own receiver chain. Structurally identical to `wide` — the
 # same chain in the same order — with the ranges narrowed per 03 §3's "matched
-# narrows" note: LP 2200-3000 Hz, SNR skewed clean, squelch_gate up to 0.8,
-# codec always-ish on (LiveATC-style delivery), bed_prob 0.8.
+# narrows" note: band limiting tightened (see the `bandpass` row below, which is
+# fitted rather than copied), SNR skewed clean, squelch_gate up to 0.8, codec
+# always-ish on (LiveATC-style delivery), bed_prob 0.8.
 #
 # `channel.noise.beds_dir` points at noise harvested from the calibration clips,
 # so bed_prob 0.8 means most clips carry the real receiver's own floor rather
@@ -35,9 +36,14 @@
 #                 several dB noisier than the real set to satisfy a statistic
 #                 that has stopped responding to it. That is metric-chasing, so
 #                 the fit stops at a defensible ~16 dB injected median.
-#   bandpass.high 03 says 2200-3000. The 98%-power edge lands well below the
-#                 filter corner, so the upper half of that range is what puts
-#                 the median at 2359 against a real 2406.
+#   bandpass      03 says low 200-400 / high 2200-3000, and the 98%-power edge
+#                 lands well below the filter corner either way. Since P4 these
+#                 are the *cascade's* corners, not one filter's: `reapply_bandpass`
+#                 re-runs the same filter 2.17 times per clip on average (on top
+#                 of the one or two declared applications), so a corner pair that
+#                 reads as 300-3400 on paper delivers far less. Re-fitted on the
+#                 same 200 clips to hold the measured edges where they were:
+#                 low 130-250, high 3200-3400.
 #   threshold_db  the gate's intra-speech half is what drives the SNR estimate,
 #                 not its floor depth: at -28..-18 it closes during ordinary
 #                 pauses on most clips and the median SNR reads 62. At -42..-30
@@ -45,6 +51,39 @@
 #                 gate hard reproduce real's >60 dB outlier tail (01 §2 reports
 #                 those as "a few clips", not the norm). Floor depth barely
 #                 moves any statistic once the threshold is conservative.
+#
+# P4 turns on `channel.reapply_bandpass` (default true everywhere): the drawn
+# passband is re-applied wherever the signal crosses a real filter with splatter
+# in front of it — the receiver front end after the RF-side steps and the
+# co-channel sum, and the audio output stage after the squelch artifacts, before
+# the delivery codec. `atcgen/channel/chain.py`'s module docstring has the
+# placement argument. Measured on the same 200 cached-TTS clips, against
+# data/real/calibration:
+#
+#   reapply   bandpass low / high     LTAS L1   edge p50 (W)   low p50 (W)
+#   off       200-320 / 2500-3000      7.02     2359 ( 83)     203 ( 8.9)
+#   on        200-320 / 2500-3000      8.41     2109 (263)     297 (75.4)
+#   off       130-250 / 2800-3300      7.98     2383 ( 70)     172 (51.0)
+#   on        130-250 / 3200-3400      3.35     2336 ( 84)     203 (11.5)
+#
+# (Four arms measured identically, in memory, so they compare; the same last row
+# through gen_profile_smoke.py's write-then-read path reads LTAS L1 3.52, which
+# is what runs/p4_matched_stats.json holds.)
+#
+# Two things there. Re-applying without re-fitting is a regression — three
+# passes of the same 4th-order filter narrow the delivered band far past the
+# real set, and `spectral_low` leaves its p10-p90 outright. And the gain is the
+# re-application's, not the re-fit's: row 3 is the control, and widening the
+# corners with the filter still applied once is *worse* than the baseline.
+# Filtering the noise, crackle and distortion products the way a receiver does
+# is what takes LTAS L1 from 7.02 to 3.35 (3.52 on disk) — a bigger fidelity gain
+# than the harvested noise beds bought (8.31 -> 7.05). Above 3.4 kHz, where the
+# real set has essentially nothing, the chain used to sit +30.6 dB over it on
+# average (+43 dB at 5.7 kHz); it now sits +1.6 dB.
+#
+# All four `atcgen.channel.envelope` rules pass on this profile — it is the one
+# fitted to the real set, and the check's offsets are calibrated on it:
+#   uv run python -m atcgen.channel.envelope --config configs/mode1_matched.yaml
 
 mode: procedural
 seed: 0
@@ -52,7 +91,13 @@ seed: 0
 output:
   sample_rate: 16000
   format: wav
+  # `rms` targets loudness_db; `lufs` targets loudness_lufs through EBU R128
+  # (atcgen/channel/loudness.py). Still rms everywhere: loudness_db was fitted
+  # against the real set's rms_db, and switching the target is an experiment,
+  # not a refactor.
+  loudness_mode: rms
   loudness_db: {uniform: [-25, -20]}
+  loudness_lufs: -23.0
 
 tts:
   voices:
@@ -84,6 +129,7 @@ dataset:
 channel:
   profile: matched
   clean_arm_prob: 0.03
+  reapply_bandpass: true
   noise:
     # Noise harvested from the calibration clips themselves — the real receiver's
     # own floor, which is the whole point of this profile. A run-machine path
@@ -113,8 +159,9 @@ channel:
       narrow_sr: {choice: [5000, 6000]}
     - primitive: bandpass
       prob: 1.0
-      low: {uniform: [200, 320]}
-      high: {uniform: [2500, 3000]}
+      # cascade corners, re-fitted for `reapply_bandpass` — see the header
+      low: {uniform: [130, 250]}
+      high: {uniform: [3200, 3400]}
     - primitive: agc_wander
       prob: 0.6
       strength: {uniform: [0.0, 0.4]}

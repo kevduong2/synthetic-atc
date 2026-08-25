@@ -80,7 +80,7 @@ def test_chain_knobs_address_steps_by_primitive_name():
     assert step(mutated, "codec_roundtrip")["prob"] == pytest.approx(0.3)
     assert step(mutated, "additive_noise")["snr_db"]["beta_scaled"] == [2.0, 1.8, 5, 35.0]
     assert step(mutated, "additive_noise")["bed_prob"] == pytest.approx(0.25)
-    # centre slides to 380, the 120 Hz width of [200, 320] is preserved
+    # centre slides to 380, the 120 Hz width of [130, 250] is preserved
     assert step(mutated, "bandpass")["low"]["uniform"] == [320.0, 440.0]
 
 
@@ -101,12 +101,12 @@ def test_unknown_primitive_raises_with_a_readable_message():
 
 def test_uniform_pair_stays_ordered_when_a_knob_crosses_it():
     config = base()
-    # Drive the upper bandpass edge below the profile's lower one (2500).
+    # Drive the upper bandpass edge below the profile's lower one (3200).
     space = SearchSpace([chain_param_knob("high", "bandpass", "high", 1, 2400.0, 3400.0)])
     mutated = space.to_config(config, np.array([0.0]))
     low, high = step(mutated, "bandpass")["high"]["uniform"]
     assert low <= high
-    assert [low, high] == [2400.0, 2500]
+    assert [low, high] == [2400.0, 3200]
 
     # ... and a beta_scaled low bound pushed above its high bound.
     space = SearchSpace([chain_param_knob("lo", "additive_noise", "snr_db", 2, 0.0, 40.0)])
@@ -136,7 +136,7 @@ def test_default_vector_round_trips_the_hand_tuned_profile():
     assert described["additive_noise.bed_prob"] == pytest.approx(0.8)
     assert described["codec_roundtrip.prob"] == pytest.approx(0.8)
     assert described["voice_augment.pitch_prob"] == pytest.approx(0.5)
-    assert described["bandpass.low_center"] == pytest.approx(260.0)
+    assert described["bandpass.low_center"] == pytest.approx(190.0)
 
 
 def test_default_vector_falls_back_to_the_midpoint_for_absent_leaves():

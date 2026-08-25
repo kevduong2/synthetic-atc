@@ -126,11 +126,22 @@ class DistSpec:
 
 @dataclass
 class OutputConfig:
+    """Delivery format and level.
+
+    ``loudness_mode`` picks which level target the post stage honours: ``rms``
+    draws ``loudness_db`` and normalizes RMS to it (what every profile does
+    today), ``lufs`` normalizes EBU R128 integrated loudness to
+    ``loudness_lufs`` instead (research-findings §4.3, via
+    ``atcgen.channel.loudness``).
+    """
+
     sample_rate: int = 16000
     format: str = "wav"
     loudness_db: DistSpec = field(
         default_factory=lambda: DistSpec.parse({"uniform": [-23, -17]})
     )
+    loudness_mode: str = "rms"
+    loudness_lufs: float = -23.0
 
 
 @dataclass
@@ -197,11 +208,20 @@ class ChannelNoiseConfig:
 
 @dataclass
 class ChannelConfig:
+    """The Mode 1 chain.
+
+    ``reapply_bandpass`` re-runs the drawn passband wherever the signal crosses
+    a real filter downstream of something that splatters out of band; see
+    ``atcgen.channel.chain``'s module docstring.  It is on by default because
+    it is physics, and off only for an ablation.
+    """
+
     profile: str = "wide"
     clean_arm_prob: float = 0.07
     chain: list[ChainStep] = field(default_factory=list)
     shuffle_groups: list[list[str]] = field(default_factory=list)
     noise: ChannelNoiseConfig = field(default_factory=ChannelNoiseConfig)
+    reapply_bandpass: bool = True
 
 
 @dataclass
@@ -290,7 +310,8 @@ class GeneratorConfig:
 
 def _parse_output(value: Any, path: str) -> OutputConfig:
     data = _mapping(value, path)
-    _reject_unknown(data, {"sample_rate", "format", "loudness_db"}, path)
+    _reject_unknown(data, {"sample_rate", "format", "loudness_db", "loudness_mode",
+                           "loudness_lufs"}, path)
     default = OutputConfig()
     sample_rate = data.get("sample_rate", default.sample_rate)
     if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate <= 0:
@@ -300,7 +321,12 @@ def _parse_output(value: Any, path: str) -> OutputConfig:
         raise ValueError(f"{path}.format must be a non-empty string")
     loudness = DistSpec.parse(data.get("loudness_db", default.loudness_db.as_dict()),
                               f"{path}.loudness_db")
-    return OutputConfig(sample_rate, format_value, loudness)
+    mode = data.get("loudness_mode", default.loudness_mode)
+    if mode not in {"rms", "lufs"}:
+        raise ValueError(f"{path}.loudness_mode must be rms or lufs")
+    lufs = _number(data.get("loudness_lufs", default.loudness_lufs),
+                   f"{path}.loudness_lufs")
+    return OutputConfig(sample_rate, format_value, loudness, mode, lufs)
 
 
 def _parse_tts(value: Any, path: str) -> TTSConfig:
@@ -378,7 +404,7 @@ def _parse_qc(value: Any, path: str) -> QCConfig:
 def _parse_channel(value: Any, path: str) -> ChannelConfig:
     data = _mapping(value, path)
     _reject_unknown(data, {"profile", "clean_arm_prob", "chain", "shuffle_groups",
-                           "noise"}, path)
+                           "noise", "reapply_bandpass"}, path)
     profile = data.get("profile", "wide")
     if not isinstance(profile, str) or not profile:
         raise ValueError(f"{path}.profile must be a non-empty string")
@@ -412,6 +438,9 @@ def _parse_channel(value: Any, path: str) -> ChannelConfig:
     beds_dir = noise_data.get("beds_dir")
     if beds_dir is not None and (not isinstance(beds_dir, str) or not beds_dir):
         raise ValueError(f"{noise_path}.beds_dir must be a non-empty string or null")
+    reapply = data.get("reapply_bandpass", True)
+    if not isinstance(reapply, bool):
+        raise ValueError(f"{path}.reapply_bandpass must be a boolean")
     return ChannelConfig(
         profile=profile,
         clean_arm_prob=_probability(
@@ -419,6 +448,7 @@ def _parse_channel(value: Any, path: str) -> ChannelConfig:
         chain=chain,
         shuffle_groups=[list(group) for group in groups],
         noise=ChannelNoiseConfig(beds_dir),
+        reapply_bandpass=reapply,
     )
 
 

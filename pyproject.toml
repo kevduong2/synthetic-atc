@@ -17,6 +17,7 @@ dependencies = [
     "tqdm>=4.66",
     "librosa>=0.11.0",
     "pyyaml>=6.0.3",
+    "pyloudnorm>=0.1",
 ]
 
 [project.optional-dependencies]

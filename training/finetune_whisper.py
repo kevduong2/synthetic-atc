@@ -89,13 +89,13 @@ def _load_real_train(paths: Sequence[str] | None):
     return load_real_atc(split="train").select_columns(["audio", "text"])
 
 
-def _mix_one_to_one(synthetic, real):
+def _mix_one_to_one(synthetic, real, seed: int = 0):
     from datasets import concatenate_datasets
 
     # Upsample real to approximately 1:1 with synthetic. The final partial
     # excess is retained, matching the original joint-mixing behavior.
     reps = max(1, round(len(synthetic) / len(real)))
-    return concatenate_datasets([synthetic] + [real] * reps).shuffle(seed=0)
+    return concatenate_datasets([synthetic] + [real] * reps).shuffle(seed=seed)
 
 
 def main():
@@ -125,6 +125,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--fp16", action="store_true")
     ap.add_argument("--eval-holdout", type=float, default=0.02)
+    ap.add_argument("--seed", type=int, default=42,
+                    help="trainer seed (data order, dropout); 42 is the HF default")
     args = ap.parse_args()
 
     if args.real_only:
@@ -151,7 +153,8 @@ def main():
     else:
         holdout_source = real if args.real_only else synthetic
         split = holdout_source.train_test_split(
-            test_size=max(args.eval_holdout, 1 / max(len(holdout_source), 2)), seed=0
+            test_size=max(args.eval_holdout, 1 / max(len(holdout_source), 2)),
+            seed=args.seed,
         )
         if args.real_only:
             real = split["train"]
@@ -164,7 +167,7 @@ def main():
     elif args.curriculum:
         phases = curriculum_phases(synthetic, real)
     elif args.mix_real:
-        phases = [TrainingPhase("joint", _mix_one_to_one(synthetic, real))]
+        phases = [TrainingPhase("joint", _mix_one_to_one(synthetic, real, args.seed))]
     else:
         phases = [TrainingPhase("synthetic", synthetic)]
 
@@ -204,6 +207,7 @@ def main():
         logging_steps=25,
         report_to=[],
         remove_unused_columns=False,
+        seed=args.seed,
     )
 
     trainer = None

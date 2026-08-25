@@ -1,0 +1,26 @@
+{
+  "_comment": "Measured p10-p90 envelope of the real calibration corpus, read from channel_stats comparison output. Regenerate with: python -m atcgen.channel.envelope --stats runs/mode1_matched_stats.json runs/mode2_calibrated_stats.json --out configs/real_envelope.json",
+  "n_real": 100,
+  "sources": [
+    "runs/mode1_matched_stats.json",
+    "runs/mode2_calibrated_stats.json"
+  ],
+  "metrics": {
+    "snr_db": {
+      "p10": 14.076,
+      "p90": 36.613
+    },
+    "spectral_edge_hz": {
+      "p10": 1828.1,
+      "p90": 2735.96
+    },
+    "spectral_low_hz": {
+      "p10": 156.2,
+      "p90": 265.6
+    },
+    "rms_db": {
+      "p10": -25.09,
+      "p90": -18.794
+    }
+  }
+}
