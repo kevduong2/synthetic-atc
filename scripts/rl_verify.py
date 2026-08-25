@@ -156,7 +156,7 @@ def format_table(verify_report: dict) -> str:
         lines.append(
             f"{name:<10} {_fmt(report['wer']['atc_normalized']):>8} "
             f"{_fmt(report['wer']['raw']):>8} "
-            f"{_fmt(report['callsign']['token_accuracy']):>13} "
+            f"{_fmt(report['callsign']['accuracy']):>13} "
             f"{_fmt(report['hallucination']['rate']):>12}"
         )
     lines.append("")

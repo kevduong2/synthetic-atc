@@ -7,8 +7,8 @@ Small validation run on the Mac:
 
 5080 protocol (run with cached model/data; never on the development machine):
   # Baseline 1: zero-shot Whisper-small.en (evaluation only)
-  uv run python training/evaluate.py --model openai/whisper-small.en --dataset real \
-      --out reports/zero_shot_small_en.json
+  uv run python training/evaluate.py --model openai/whisper-small.en \
+      --split-name locked_test --report-out reports/zero_shot_small_en.json
 
   # Baseline 2: real-only fine-tuning
   uv run python training/finetune_whisper.py --real-only \

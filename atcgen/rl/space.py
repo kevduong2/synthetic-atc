@@ -392,7 +392,12 @@ def default_atc_space() -> SearchSpace:
                           kind="prob"),
 
         # -- band limiting -------------------------------------------------
-        chain_param_knob("bandpass.high_hi", "bandpass", "high", 1, 2400.0, 3400.0),
+        # The matched profile's cascade corners were re-fitted to 3200-3400 Hz
+        # in P4, which put this knob's ceiling exactly on the profile value —
+        # the search could only ever narrow the band.  Re-ranged to bracket it
+        # instead; the top sits on the envelope's own config-space p90 for
+        # `spectral_edge_hz` (3700 Hz), so the widest draw is still in-envelope.
+        chain_param_knob("bandpass.high_hi", "bandpass", "high", 1, 2700.0, 3700.0),
         chain_center_knob("bandpass.low_center", "bandpass", "low", 180.0, 380.0),
 
         # -- receiver-side artifacts --------------------------------------

@@ -148,7 +148,7 @@ def test_format_table_handles_missing_callsign_accuracy():
         "arms": {
             name: {"report": {
                 "wer": {"atc_normalized": 0.1, "raw": 0.2},
-                "callsign": {"token_accuracy": None},
+                "callsign": {"accuracy": None},
                 "hallucination": {"rate": None},
             }}
             for name in rl_verify.ARM_ORDER

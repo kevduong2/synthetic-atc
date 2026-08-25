@@ -12,7 +12,13 @@ import soundfile as sf
 
 from atcgen.config import config_hash, dump_resolved, load_config
 from atcgen.dataset import build as build_mod
-from atcgen.dataset.build import DEFAULT_CONFIG, build_dataset, make_backend
+from atcgen.dataset.build import (
+    DEFAULT_CONFIG,
+    build_dataset,
+    load_manifest,
+    make_backend,
+)
+from atcgen.entities import Entity
 from atcgen.text.grammar import Utterance
 from atcgen.text.sources import WeightedSampler
 
@@ -110,6 +116,17 @@ def utterances(spec):
     return out
 
 
+def labelled_utterance():
+    """One utterance carrying ground-truth entities and a display rendering."""
+    return Utterance(
+        spoken="CSA123, descend flight level three five zero.",
+        transcript="csa one two three descend flight level three five zero",
+        role="controller", kind="descend",
+        display="CSA123, descend FL350",
+        entities=[Entity("callsign", "CSA123", "csa one two three"),
+                  Entity("flight_level", "FL350", "three five zero")])
+
+
 def read_manifest(manifest_path):
     return [json.loads(line) for line in Path(manifest_path).read_text().splitlines()
             if line.strip()]
@@ -131,8 +148,8 @@ def test_manifest_record_schema_and_gen_blob(tmp_path):
 
     assert len(records) == 6
     for index, record in enumerate(records):
-        assert set(record) == {"audio", "text", "role", "kind", "category",
-                               "duration", "gen"}
+        assert set(record) == {"audio", "text", "text_display", "role", "kind",
+                               "category", "duration", "entities", "gen", "lineage"}
         assert record["audio"] == f"wavs/{index:06d}.wav"
         assert (tmp_path / "out" / record["audio"]).exists()
         gen = record["gen"]
@@ -151,6 +168,121 @@ def test_manifest_record_schema_and_gen_blob(tmp_path):
         wav, sr = sf.read(tmp_path / "out" / record["audio"], dtype="float32")
         assert sr == config.output.sample_rate
         assert record["duration"] == pytest.approx(len(wav) / sr, abs=0.001)
+
+
+def test_rows_carry_ground_truth_entities_and_the_display_form(tmp_path):
+    """The grammar's structured labels reach the manifest without re-parsing."""
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 0.0}\n")
+    manifest = build_dataset(config, tmp_path / "out", 2,
+                             PoolSource([labelled_utterance()]), FakeTTS())
+
+    for record in read_manifest(manifest):
+        assert record["text_display"] == "CSA123, descend FL350"
+        assert record["entities"] == [
+            {"type": "callsign", "value": "CSA123", "spoken": "csa one two three",
+             "critical": True},
+            {"type": "flight_level", "value": "FL350", "spoken": "three five zero",
+             "critical": True},
+        ]
+
+
+def test_an_utterance_without_a_display_form_falls_back_to_its_transcript(tmp_path):
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 0.0}\n")
+    manifest = build_dataset(config, tmp_path / "out", 2,
+                             PoolSource(utterances([("routine", 1.0, 1)])), FakeTTS())
+    for record in read_manifest(manifest):
+        assert record["text_display"] == record["text"] == "routine utterance 0"
+        assert record["entities"] == []
+
+
+def test_noise_rows_carry_no_entities_and_no_display_text(tmp_path):
+    manifest = build_dataset(config_for(tmp_path, "dataset: {noise_only_frac: 1.0}\n"),
+                             tmp_path / "out", 3,
+                             PoolSource([labelled_utterance()]), FakeTTS())
+    for record in read_manifest(manifest):
+        assert record["entities"] == [] and record["text_display"] == ""
+
+
+def test_lineage_names_the_profile_config_and_text_source(tmp_path):
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 0.0}\n")
+    out = tmp_path / "out"
+    manifest = build_dataset(config, out, 3, PoolSource([labelled_utterance()]),
+                             FakeTTS())
+    records = read_manifest(manifest)
+
+    lineages = {json.dumps(record["lineage"], sort_keys=True) for record in records}
+    assert len(lineages) == 1                    # one run, one lineage
+    lineage = records[0]["lineage"]
+    assert set(lineage) == {"config_hash", "profile", "mode", "seed", "text_source",
+                            "atcgen_version", "git_revision", "built_at"}
+    assert lineage["config_hash"] == config_hash(config)
+    assert lineage["profile"] == "test" and lineage["mode"] == "procedural"
+    assert lineage["seed"] == config.seed
+    assert lineage["text_source"] == "PoolSource"
+    assert lineage["built_at"].endswith("+00:00")
+
+
+def test_lineage_records_a_string_text_source_spec(tmp_path):
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 1.0}\n")
+    manifest = build_dataset(config, tmp_path / "out", 2, "grammar:region=eu",
+                             FakeTTS())
+    assert {r["lineage"]["text_source"] for r in read_manifest(manifest)} == \
+           {"grammar:region=eu"}
+
+
+def test_load_manifest_drops_provenance_but_keeps_entities(tmp_path):
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 0.0}\n")
+    manifest = build_dataset(config, tmp_path / "out", 2,
+                             PoolSource([labelled_utterance()]), FakeTTS())
+    ds = load_manifest(manifest)
+
+    assert "gen" not in ds.column_names and "lineage" not in ds.column_names
+    assert {"audio", "text", "text_display", "entities"} <= set(ds.column_names)
+    assert ds[0]["entities"][0]["value"] == "CSA123"
+
+
+# --------------------------------------------------------------------------
+# post stage: level targets
+# --------------------------------------------------------------------------
+
+def test_lufs_mode_normalizes_integrated_loudness(tmp_path):
+    """`lufs` hits the R128 target, except where the peak ceiling gets there first.
+
+    Both outcomes are the contract: `normalize_lufs` scales to the target and
+    *then* holds the peak under 0.99, so a clip the channel left peaky ends up
+    quieter than the target rather than clipped.
+    """
+    from atcgen.channel.loudness import integrated_lufs
+
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 0.0}\n"
+                                  "output: {loudness_mode: lufs, loudness_lufs: -20.0}\n")
+    manifest = build_dataset(config, tmp_path / "out", 3,
+                             PoolSource(utterances([("routine", 1.0, 2)])), FakeTTS())
+
+    on_target = 0
+    for record in read_manifest(manifest):
+        wav, sr = sf.read(manifest.parent / record["audio"], dtype="float32")
+        measured = integrated_lufs(wav, sr)
+        if not np.isfinite(measured):
+            continue                       # under one R128 block: RMS fallback
+        peak = float(np.abs(wav).max())
+        if measured == pytest.approx(-20.0, abs=0.5):
+            on_target += 1
+        else:
+            assert measured < -20.0 and peak == pytest.approx(0.99, abs=0.01)
+    assert on_target                       # the target is reached, not merely bounded
+
+
+def test_rms_stays_the_default_and_is_unaffected_by_the_lufs_target(tmp_path):
+    body = "dataset: {noise_only_frac: 0.0}\n"
+    source = PoolSource(utterances([("routine", 1.0, 2)]))
+    plain = build_dataset(config_for(tmp_path, body), tmp_path / "a", 3, source, FakeTTS())
+    with_lufs = build_dataset(
+        config_for(tmp_path, body + "output: {loudness_lufs: -14.0}\n"),
+        tmp_path / "b", 3, source, FakeTTS())
+
+    assert (plain.parent / "wavs/000000.wav").read_bytes() == \
+           (with_lufs.parent / "wavs/000000.wav").read_bytes()
 
 
 def test_config_hash_matches_the_dumped_resolved_config(tmp_path):
@@ -343,7 +475,7 @@ def test_noise_only_fraction_is_honoured(tmp_path):
     assert all(r["gen"]["voice"] is None and 2.0 <= r["duration"] <= 6.5 for r in records)
     assert read_stats(all_noise)["noise_only"]["achieved"] == 1.0
     for record in records:                 # a continuous bed, not silence + clicks
-        wav, sr = sf.read(all_noise.parent / record["audio"], dtype="float32")
+        wav, _ = sf.read(all_noise.parent / record["audio"], dtype="float32")
         frames = wav[:len(wav) // 160 * 160].reshape(-1, 160)
         quiet_frame_db = np.percentile(10 * np.log10((frames ** 2).mean(1) + 1e-20), 10)
         assert quiet_frame_db > -50.0

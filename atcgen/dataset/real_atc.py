@@ -15,15 +15,21 @@ import soundfile as sf
 REAL_SR = 16000
 
 
-def load_real_atc(split: str = "test", corpus: str = "jacktol/atc-dataset"):
-    """Return a HF Dataset with 'audio' (16 kHz) and 'text' columns."""
+def load_real_atc(split: str = "test", corpus: str = "jacktol/atc-dataset",
+                  cast_audio: bool = True):
+    """Return a HF Dataset with 'audio' (16 kHz) and 'text' columns.
+
+    `cast_audio=False` skips the resampling cast for transcript-only work
+    (vocab harvesting, split bookkeeping), where decoding the clips is waste.
+    """
     from datasets import Audio, load_dataset
 
     ds = load_dataset(corpus, split=split)
     # normalize column names across corpora
     if "transcription" in ds.column_names:
         ds = ds.rename_column("transcription", "text")
-    ds = ds.cast_column("audio", Audio(sampling_rate=REAL_SR))
+    if cast_audio:
+        ds = ds.cast_column("audio", Audio(sampling_rate=REAL_SR))
     return ds
 
 

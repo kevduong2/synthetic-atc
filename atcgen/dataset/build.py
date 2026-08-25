@@ -19,12 +19,20 @@ A small fraction of samples are noise-only (empty transcript, category
 same channel, see `_noise_bed`.  Pilot utterances are sometimes double-hopped
 through a ground relay.  `load_manifest` loads a built set for
 training (extra keys are ignored).
+
+Every row also carries the structured ground truth the verification gate and
+the entity panel score against (`entities`, straight from the grammar — the
+label is never re-parsed), the controller-display rendering of the same
+transmission (`text_display`), and a `lineage` blob naming what produced the
+run.
 """
 
 import inspect
 import json
 import random
+import subprocess
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,8 +41,10 @@ from tqdm import tqdm
 
 from ..channel.chain import ProceduralChannel, UtteranceMeta
 from ..channel.learned.backend import CalibratedChannel
+from ..channel.loudness import normalize_lufs
 from ..channel.primitives import TARGET_SR, NoiseBank, pink_noise
-from ..config import GeneratorConfig, QCConfig, dump_resolved
+from ..config import GeneratorConfig, OutputConfig, QCConfig, dump_resolved
+from ..entities import entities_to_dicts
 from ..eval.qc import QCConfig as QCGates
 from ..eval.qc import QCTally, qc_sample
 from ..text.grammar import Utterance
@@ -46,6 +56,11 @@ NOISE_ONLY_SEC = (2.0, 6.0)          # duration range of the noise-only samples
 NOISE_ONLY_BED_RMS = 0.03            # the bed the channel shapes when nobody speaks
 DURATION_EDGES = list(range(0, 32, 2))
 SNR_EDGES = list(range(-5, 45, 5))
+
+#: Manifest keys that are provenance rather than training data.  They are
+#: per-sample free-form (`gen`, `gate`) or constant across the run
+#: (`lineage`), and their ragged shape has no single Arrow schema.
+NON_TRAINING_COLUMNS = ("gen", "lineage", "gate")
 
 
 def make_backend(config: GeneratorConfig, name: str | None = None):
@@ -87,6 +102,7 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
     rng = random.Random(config.seed)
     augment_rng = random.Random(f"{config.seed}:voice-augment")
 
+    source_spec = _source_spec(text_source)
     if text_source is None or isinstance(text_source, str):
         text_source = make_text_source(text_source or "grammar")
     sampler = WeightedSampler.for_source(text_source, config.dataset.category_quotas)
@@ -97,6 +113,7 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
 
     names, weights, backends = _backend_pool(config)
     _, resolved_hash = dump_resolved(config, out)
+    lineage = _lineage(config, resolved_hash, source_spec)
     gates = _gates(config.qc)
     tally = QCTally()
 
@@ -142,11 +159,16 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
             record = {
                 "audio": relative,
                 "text": utterance.transcript if utterance else "",
+                # "" on an Utterance means "the display form is the transcript"
+                "text_display": (utterance.display or utterance.transcript
+                                 if utterance else ""),
                 "role": utterance.role if utterance else "none",
                 "kind": utterance.kind if utterance else "noise",
                 "category": utterance.category if utterance else "noise",
                 "duration": round(len(wav) / sr, 3),
+                "entities": entities_to_dicts(utterance.entities) if utterance else [],
                 "gen": gen,
+                "lineage": lineage,
             }
             manifest.write(json.dumps(record) + "\n")
             rows.append(record)
@@ -154,6 +176,56 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
     stats = _stats(config, rows, sampler, tally, kept_with_flag, resolved_hash)
     (out / "stats.json").write_text(json.dumps(stats, indent=2))
     return manifest_path
+
+
+def _source_spec(text_source: TextSource | str | None) -> str:
+    """How the caller named its text source, for the lineage blob."""
+    if text_source is None:
+        return "grammar"
+    if isinstance(text_source, str):
+        return text_source
+    return type(text_source).__name__
+
+
+def _git_revision() -> str | None:
+    """`git describe` of the working tree, or None outside a checkout.
+
+    Cheap enough to run once per build and it is the only handle on *which
+    code* produced a set — the config hash covers the config, not the chain.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent), "describe",
+             "--always", "--dirty", "--tags"],
+            capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def _lineage(config: GeneratorConfig, resolved_hash: str, source_spec: str) -> dict:
+    """Per-run provenance, copied onto every row so a sample travels with it.
+
+    Rows get split, filtered by the gate, and mixed into training pools long
+    after the run directory is out of sight; a row that cannot name the
+    profile, code and text source behind it cannot be audited later.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        package_version = version("atc-gan")
+    except PackageNotFoundError:      # running from a source tree, uninstalled
+        package_version = None
+    return {
+        "config_hash": resolved_hash,
+        "profile": config.channel.profile if config.channel else config.mode,
+        "mode": config.mode,
+        "seed": config.seed,
+        "text_source": source_spec,
+        "atcgen_version": package_version,
+        "git_revision": _git_revision(),
+        "built_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
 
 
 def _backend_pool(config: GeneratorConfig) -> tuple[list[str], list[float], dict]:
@@ -206,7 +278,9 @@ def _render(config: GeneratorConfig, tts, voice_augment: VoiceAugment, backend,
         wav, record = backend(clean, tts.sample_rate, rng, meta,
                               interference=interference, hops=hops)
         gen = {"voice": voice, "speed": round(speed, 3)}
-    wav = _post(wav, config.output.loudness_db.sample(rng))
+    # drawn in both modes so the two share an RNG stream and `rms` runs are
+    # bit-identical to what they were before `lufs` existed
+    wav = _post(wav, config.output.loudness_db.sample(rng), sr, config.output)
     gen.update({**augment_record, "channel": record.as_dict()})
     return wav, gen
 
@@ -247,9 +321,19 @@ def _synthesize(tts, text: str, rng: random.Random, voice: str,
     return tts.synthesize(text, rng)
 
 
-def _post(wav: np.ndarray, loudness_db: float | None) -> np.ndarray:
-    """Post stage (02 §3): target loudness jitter, then peak safety."""
+def _post(wav: np.ndarray, loudness_db: float | None, sr: int,
+          output: OutputConfig) -> np.ndarray:
+    """Post stage (02 §3): hit the level target, then peak safety.
+
+    `output.loudness_mode` picks the target: `rms` normalizes RMS to the
+    per-sample `loudness_db` draw (the default every profile ships), `lufs`
+    normalizes EBU R128 integrated loudness to a fixed `output.loudness_lufs`
+    instead — a constant target, because the jitter R128 is there to remove is
+    exactly what `loudness_db`'s spread puts back.
+    """
     x = np.asarray(wav, dtype=np.float32)
+    if output.loudness_mode == "lufs":
+        return normalize_lufs(x, sr, output.loudness_lufs)
     rms = float(np.sqrt(np.mean(x.astype(np.float64) ** 2)))
     if loudness_db is not None and rms > 0:
         x = (x * (10.0 ** (float(loudness_db) / 20.0) / rms)).astype(np.float32)
@@ -318,7 +402,12 @@ def _stats(config: GeneratorConfig, rows: list[dict], sampler: WeightedSampler |
 
 
 def load_manifest(manifest_path: str | Path):
-    """Load a built dataset as a HF Dataset with an Audio column."""
+    """Load a built dataset as a HF Dataset with an Audio column.
+
+    Works on a gated manifest too: `tier` survives (downstream selects on it),
+    the free-form `gate` blob does not.  `entities` does survive — it is
+    rectangular ground truth, and the entity panel scores against it.
+    """
     from datasets import Audio, Dataset
 
     manifest_path = Path(manifest_path)
@@ -326,8 +415,7 @@ def load_manifest(manifest_path: str | Path):
     records = [json.loads(line) for line in open(manifest_path) if line.strip()]
     for record in records:
         record["audio"] = str(root / record["audio"])
-        # provenance is per-sample free-form; it is not a training column and
-        # its ragged shape has no single Arrow schema
-        record.pop("gen", None)
+        for column in NON_TRAINING_COLUMNS:
+            record.pop(column, None)
     ds = Dataset.from_list(records)
     return ds.cast_column("audio", Audio(sampling_rate=TARGET_SR))
