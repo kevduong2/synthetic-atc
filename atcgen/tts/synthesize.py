@@ -1,8 +1,9 @@
 """TTS engines for rendering ATC utterances.
 
-Engine-agnostic interface: `synthesize(text, rng) -> (waveform float32 mono, sr)`.
-KokoroTTS is the default (Apache-2.0, ~82M params, fast on CPU/MPS, many
-voices). F5-TTS voice cloning can be added later behind the same interface.
+Engine-agnostic interface: `synthesize(text, rng) -> waveform float32 mono`;
+engines expose a `sample_rate` attribute (24000 Hz for KokoroTTS). KokoroTTS is
+the default (Apache-2.0, ~82M params, fast on CPU/MPS, many voices). F5-TTS
+voice cloning can be added later behind the same interface.
 """
 
 import random

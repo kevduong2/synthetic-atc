@@ -43,6 +43,14 @@ Key modules:
 - `atcgen/rl/` — outer config search (CEM vs. random control) and the L3
   Thompson-sampling recipe bandit with the teacher-bounded hardness window.
 
+## Documentation
+
+Start with the [documentation index](docs/README.md). The plain-Markdown
+architecture overview is in [docs/architecture.md](docs/architecture.md),
+with the illustrated version in [the systems manual](docs/systems-manual.html).
+Use [docs/cli-reference.md](docs/cli-reference.md) for commands and
+[docs/results.md](docs/results.md) for the current evidence snapshot.
+
 ## Quickstart
 
 ```bash
@@ -69,4 +77,5 @@ Channel calibration references: `data/real/calibration/` (own SDR captures).
 Pre-release; nothing is pinned and schemas may change freely (see `AGENTS.md`).
 Experiment results live in `runs/` (gitignored); the current validation-matrix
 summary is written to `runs/matrix_v1/summary_locked_test.json` by
-`scripts/run_matrix.py`.
+`scripts/run_matrix.py`, and `docs/results.md` snapshots the current
+experimental evidence in-repo.

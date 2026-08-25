@@ -1,0 +1,1324 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>atc-gan Systems Manual</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612:wght@400;700&family=B612+Mono:wght@400;700&family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #FAF8F5;
+    --bg-raise: #FFFFFF;
+    --ink: #2B2723;
+    --muted: #6F675C;
+    --line: #E4DDD2;
+    --line-strong: #C9BFB1;
+    --accent: #D9481C;
+    --accent-wash: #F9E7DE;
+    --gold: #A87B0F;
+    --silver: #6E7681;
+    --adv: #7A4FA3;
+    --rej: #B03030;
+    --ok: #2E7D46;
+    --code-bg: #F1EDE6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #171412;
+      --bg-raise: #201C18;
+      --ink: #EAE5DE;
+      --muted: #A0978C;
+      --line: #37302A;
+      --line-strong: #52483E;
+      --accent: #FF6A3C;
+      --accent-wash: #33221B;
+      --gold: #D9A21B;
+      --silver: #98A0AA;
+      --adv: #A47FD1;
+      --rej: #E05A5A;
+      --ok: #67C57F;
+      --code-bg: #241F1B;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #171412;
+    --bg-raise: #201C18;
+    --ink: #EAE5DE;
+    --muted: #A0978C;
+    --line: #37302A;
+    --line-strong: #52483E;
+    --accent: #FF6A3C;
+    --accent-wash: #33221B;
+    --gold: #D9A21B;
+    --silver: #98A0AA;
+    --adv: #A47FD1;
+    --rej: #E05A5A;
+    --ok: #67C57F;
+    --code-bg: #241F1B;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1, h2, h3 {
+    font-family: "B612", "Instrument Sans", Arial, sans-serif;
+    line-height: 1.2;
+    text-wrap: balance;
+    margin: 0;
+  }
+  h1 { font-size: 2.1rem; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; font-weight: 700; margin-top: 8px; }
+  h3 { font-size: 1.02rem; font-weight: 700; margin: 24px 0 6px; }
+  p { margin: 12px 0; max-width: 70ch; }
+  a { color: var(--accent); text-decoration-thickness: 1px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  code, .mono {
+    font-family: "B612 Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.85em;
+  }
+  code { background: var(--code-bg); border-radius: 3px; padding: 1px 5px; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; font-size: 0.83rem; }
+
+  .eyebrow {
+    font-family: "B612 Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 2px;
+  }
+  .kicker { color: var(--muted); font-size: 1.02rem; max-width: 62ch; margin: 10px 0 0; }
+
+  header.masthead { padding-bottom: 28px; border-bottom: 2px solid var(--ink); }
+  .burst { display: block; margin: 18px 0 22px; color: var(--accent); }
+
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin: 28px 0 0;
+  }
+  .facts div { background: var(--bg-raise); padding: 12px 14px; }
+  .facts dt {
+    font-family: "B612 Mono", monospace;
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 3px;
+  }
+  .facts dd { margin: 0; font-size: 0.92rem; font-weight: 500; }
+
+  nav.route {
+    margin: 26px 0 0;
+    font-size: 0.88rem;
+  }
+  nav.route ol {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    max-width: none;
+  }
+  nav.route li { margin: 0; }
+  nav.route a { color: var(--ink); text-decoration-color: var(--line-strong); }
+  nav.route a:hover { color: var(--accent); }
+  nav.route .wp {
+    font-family: "B612 Mono", monospace;
+    font-size: 0.7rem;
+    color: var(--accent);
+    margin-right: 5px;
+  }
+
+  section.station { margin-top: 64px; }
+  section.station > .eyebrow { border-top: 1px solid var(--line-strong); padding-top: 14px; }
+
+  figure {
+    margin: 26px 0;
+    padding: 20px 16px 12px;
+    background: var(--bg-raise);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow-x: auto;
+  }
+  figure svg { max-width: 100%; height: auto; display: block; margin: 0 auto; min-width: 560px; }
+  figcaption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-top: 12px;
+    max-width: 78ch;
+    line-height: 1.5;
+  }
+
+  /* SVG text roles */
+  .sv-t   { font-family: "B612", Arial, sans-serif; font-size: 12.5px; fill: currentColor; }
+  .sv-b   { font-family: "B612", Arial, sans-serif; font-size: 12.5px; font-weight: 700; fill: currentColor; }
+  .sv-m   { font-family: "B612 Mono", monospace; font-size: 10.5px; fill: currentColor; }
+  .sv-mut { fill: var(--muted); }
+  .sv-acc { fill: var(--accent); }
+  .sv-box  { fill: var(--bg); stroke: currentColor; stroke-width: 1.2; }
+  .sv-boxa { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.4; }
+  .sv-ln  { stroke: currentColor; stroke-width: 1.2; fill: none; }
+  .sv-lna { stroke: var(--accent); stroke-width: 1.4; fill: none; }
+  .sv-dash { stroke-dasharray: 5 4; }
+
+  .tblwrap { overflow-x: auto; margin: 18px 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.9rem;
+    background: var(--bg-raise);
+    border: 1px solid var(--line);
+  }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th {
+    font-family: "B612 Mono", monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--line-strong);
+  }
+  td.num { font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+
+  .tier {
+    display: inline-block;
+    font-family: "B612 Mono", monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 1px 8px 2px;
+    border-radius: 3px;
+    border: 1px solid;
+  }
+  .tier.gold   { color: var(--gold); border-color: var(--gold); }
+  .tier.silver { color: var(--silver); border-color: var(--silver); }
+  .tier.adv    { color: var(--adv); border-color: var(--adv); }
+  .tier.rej    { color: var(--rej); border-color: var(--rej); }
+
+  ul { padding-left: 22px; max-width: 72ch; }
+  li { margin: 6px 0; }
+  li::marker { color: var(--accent); }
+
+  .rule-list { list-style: none; padding: 0; counter-reset: rule; max-width: none; }
+  .rule-list li {
+    counter-increment: rule;
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 14px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    margin: 0;
+  }
+  .rule-list li::before {
+    content: "R" counter(rule);
+    font-family: "B612 Mono", monospace;
+    font-size: 0.8rem;
+    color: var(--accent);
+    padding-top: 2px;
+  }
+
+  /* walkthrough rail */
+  .steps { list-style: none; padding: 0; margin: 26px 0 0; counter-reset: step; max-width: none; }
+  .steps > li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    gap: 0 16px;
+    margin: 0;
+    padding: 0 0 26px;
+    position: relative;
+  }
+  .steps > li::before {
+    content: counter(step);
+    font-family: "B612", Arial, sans-serif;
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--accent);
+    background: var(--bg-raise);
+    border: 1.6px solid var(--accent);
+    border-radius: 50%;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+  }
+  .steps > li::after {
+    content: "";
+    position: absolute;
+    left: 16.5px;
+    top: 38px;
+    bottom: 4px;
+    border-left: 1.6px dashed var(--line-strong);
+  }
+  .steps > li:last-child::after { display: none; }
+  .steps h3 { margin: 4px 0 4px; }
+  .steps p { margin: 6px 0; }
+  .steps figure { margin: 14px 0 4px; }
+
+  /* utterance anatomy */
+  .utt {
+    font-family: "B612", Arial, sans-serif;
+    font-size: 1.18rem;
+    line-height: 2.1;
+    max-width: none;
+    margin: 6px 0 2px;
+  }
+  .ent {
+    padding: 1px 2px;
+    border-bottom: 3px solid;
+    white-space: nowrap;
+  }
+  .ent.cs  { border-color: var(--accent); }
+  .ent.fl  { border-color: var(--gold); }
+  .ent.qnh { border-color: var(--adv); }
+  .entrec {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    margin: 12px 0 2px;
+    font-family: "B612 Mono", monospace;
+    font-size: 0.78rem;
+  }
+  .entrec span {
+    border: 1px solid;
+    border-radius: 3px;
+    padding: 2px 8px;
+  }
+  .entrec .cs  { color: var(--accent); border-color: var(--accent); }
+  .entrec .fl  { color: var(--gold); border-color: var(--gold); }
+  .entrec .qnh { color: var(--adv); border-color: var(--adv); }
+
+  /* verdict chips */
+  .verdicts { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 6px; }
+  .verdict {
+    border: 1px solid var(--line-strong);
+    border-left: 4px solid var(--ok);
+    background: var(--bg-raise);
+    border-radius: 4px;
+    padding: 10px 14px;
+    flex: 1 1 260px;
+    min-width: 240px;
+  }
+  .verdict.no { border-left-color: var(--rej); }
+  .verdict .v-what {
+    font-family: "B612", Arial, sans-serif;
+    font-weight: 700;
+    font-size: 0.95rem;
+    margin: 0;
+  }
+  .verdict .v-num {
+    font-family: "B612 Mono", monospace;
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin: 4px 0 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .verdict .v-tag {
+    font-family: "B612 Mono", monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ok);
+  }
+  .verdict.no .v-tag { color: var(--rej); }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 18px;
+    border-top: 2px solid var(--ink);
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Systems manual · rev 2026-08-25 · post matrix_v1 · pre-release, unpinned</p>
+  <h1>atc-gan</h1>
+  <svg class="burst" role="img" aria-label="Decorative waveform of a push-to-talk radio transmission" viewBox="0 0 560 36" width="560" height="36">
+    <line x1="0" y1="18" x2="96" y2="18" stroke="currentColor" stroke-width="1.5"/>
+    <g fill="currentColor">
+      <rect x="100" y="14" width="3" height="8"/><rect x="106" y="10" width="3" height="16"/>
+      <rect x="112" y="6"  width="3" height="24"/><rect x="118" y="12" width="3" height="12"/>
+      <rect x="124" y="4"  width="3" height="28"/><rect x="130" y="9"  width="3" height="18"/>
+      <rect x="136" y="14" width="3" height="8"/><rect x="142" y="7"  width="3" height="22"/>
+      <rect x="148" y="11" width="3" height="14"/><rect x="154" y="5"  width="3" height="26"/>
+      <rect x="160" y="13" width="3" height="10"/><rect x="166" y="8"  width="3" height="20"/>
+      <rect x="172" y="12" width="3" height="12"/><rect x="178" y="15" width="3" height="6"/>
+      <rect x="184" y="10" width="3" height="16"/><rect x="190" y="14" width="3" height="8"/>
+    </g>
+    <line x1="197" y1="18" x2="360" y2="18" stroke="currentColor" stroke-width="1.5"/>
+    <g fill="currentColor" opacity="0.55">
+      <rect x="364" y="13" width="3" height="10"/><rect x="370" y="9"  width="3" height="18"/>
+      <rect x="376" y="14" width="3" height="8"/><rect x="382" y="11" width="3" height="14"/>
+      <rect x="388" y="15" width="3" height="6"/><rect x="394" y="12" width="3" height="12"/>
+    </g>
+    <line x1="401" y1="18" x2="560" y2="18" stroke="currentColor" stroke-width="1.5"/>
+  </svg>
+  <p class="kicker">Synthetic air-traffic-control radio audio for ASR training: a scenario grammar
+  with structured entity ground truth, rendered by TTS, degraded by a physically ordered channel
+  twin, verified by a two-teacher gate, and fed to a whisper student whose eval slices steer the
+  next batch of generation. This page maps the mechanism and the evidence; the code is the
+  authority.</p>
+
+  <dl class="facts">
+    <div><dt>Student</dt><dd>whisper-tiny.en (full FT)</dd></div>
+    <div><dt>Real anchor</dt><dd>jacktol/atc-dataset<br>(ATCO2-1h + UWB-ATCC)</dd></div>
+    <div><dt>Headline result</dt><dd>mix+GRPO 20.35% WER<br>vs real-only 22.40% (p=.012)</dd></div>
+    <div><dt>Gate yield (8k pool)</dt><dd>24% gold · 29% silver<br>4.8% adv · 42% rejected</dd></div>
+    <div><dt>Hardware</dt><dd>M3 MacBook / MPS now;<br>5080 for L1 + VC later</dd></div>
+  </dl>
+
+  <nav class="route" aria-label="Section navigation">
+    <p class="eyebrow" style="color: var(--muted)">Route</p>
+    <ol>
+      <li><a href="#idea"><span class="wp">01</span>The idea</a></li>
+      <li><a href="#oneclip"><span class="wp">02</span>Follow one transmission</a></li>
+      <li><a href="#circuit"><span class="wp">03</span>The full circuit</a></li>
+      <li><a href="#scenario"><span class="wp">04</span>Scenario</a></li>
+      <li><a href="#speech"><span class="wp">05</span>Speech</a></li>
+      <li><a href="#channel"><span class="wp">06</span>Channel twin</a></li>
+      <li><a href="#gate"><span class="wp">07</span>Verification gate</a></li>
+      <li><a href="#training"><span class="wp">08</span>Training + matrix</a></li>
+      <li><a href="#grpo"><span class="wp">09</span>GRPO mechanics</a></li>
+      <li><a href="#evalsec"><span class="wp">10</span>Evaluation + splits</a></li>
+      <li><a href="#steering"><span class="wp">11</span>Steering (L3)</a></li>
+      <li><a href="#invariants"><span class="wp">12</span>Invariants</a></li>
+      <li><a href="#modules"><span class="wp">13</span>Module map</a></li>
+    </ol>
+  </nav>
+</header>
+
+<!-- ============================ 01 IDEA ============================ -->
+<section class="station" id="idea">
+  <p class="eyebrow">01 · The idea</p>
+  <h2>Why this project exists, in one minute</h2>
+  <p>ASR models collapse on ATC radio: a zero-shot whisper-tiny.en reads real controller audio at
+  <strong>133% word error rate</strong> — worse than useless. Real labeled ATC audio is scarce and
+  expensive to transcribe. So instead of collecting more of it, atc-gan <em>manufactures</em> it:
+  scripts that are correct by construction, voices from TTS, and a radio channel simulated
+  faithfully enough that a student model can't tell the difference where it matters.</p>
+
+  <figure>
+    <svg role="img" aria-label="Three-step summary: write the script, break it like a radio, prove it teaches" viewBox="0 0 940 190">
+      <defs>
+        <marker id="ah0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <rect x="20" y="30" width="270" height="110" rx="4" class="sv-box"/>
+      <text x="155" y="60" text-anchor="middle" class="sv-b">Write the script</text>
+      <text x="155" y="82" text-anchor="middle" class="sv-t sv-mut">ICAO phraseology with every</text>
+      <text x="155" y="99" text-anchor="middle" class="sv-t sv-mut">callsign, level and frequency</text>
+      <text x="155" y="116" text-anchor="middle" class="sv-t sv-mut">known exactly — labels for free</text>
+
+      <line x1="290" y1="85" x2="332" y2="85" class="sv-ln" marker-end="url(#ah0)"/>
+
+      <rect x="336" y="30" width="270" height="110" rx="4" class="sv-box"/>
+      <text x="471" y="60" text-anchor="middle" class="sv-b">Break it like a radio</text>
+      <text x="471" y="82" text-anchor="middle" class="sv-t sv-mut">TTS reads it; a physically</text>
+      <text x="471" y="99" text-anchor="middle" class="sv-t sv-mut">ordered channel twin adds the</text>
+      <text x="471" y="116" text-anchor="middle" class="sv-t sv-mut">static, squelch and clipping</text>
+
+      <line x1="606" y1="85" x2="648" y2="85" class="sv-ln" marker-end="url(#ah0)"/>
+
+      <rect x="652" y="30" width="270" height="110" rx="4" class="sv-boxa"/>
+      <text x="787" y="60" text-anchor="middle" class="sv-b">Prove it teaches</text>
+      <text x="787" y="82" text-anchor="middle" class="sv-t sv-mut">a gate rejects unprovable clips;</text>
+      <text x="787" y="99" text-anchor="middle" class="sv-t sv-mut">a student trained on real+synth</text>
+      <text x="787" y="116" text-anchor="middle" class="sv-t sv-mut">must beat one trained on real</text>
+
+      <text x="20" y="175" class="sv-m sv-mut">the bar is causal, not cosmetic: synthetic data earns its place only by moving real-audio WER</text>
+    </svg>
+    <figcaption>The whole project in three moves. Everything else on this page is machinery to make
+    move three honest: frozen teacher models, locked test splits, budget-matched experiment arms,
+    and paired significance tests.</figcaption>
+  </figure>
+
+  <p>It works. On a locked real-audio test slice never touched during development, the full recipe
+  (75% real / 25% gated synthetic, then GRPO) reads at <strong>20.35% WER</strong> against
+  <strong>22.40%</strong> for the same model trained on real data alone — a significant 2.06-point
+  gain (95% CI [0.32, 4.23], paired bootstrap p=0.012). Details in
+  <a href="#training">section 08</a>.</p>
+</section>
+
+<!-- ============================ 02 ONE CLIP ============================ -->
+<section class="station" id="oneclip">
+  <p class="eyebrow">02 · Walkthrough</p>
+  <h2>Follow one transmission through the pipe</h2>
+  <p>The clearest way to see the architecture is to ride along with a single clip, from random seed
+  to training batch.</p>
+
+  <ol class="steps">
+    <li>
+      <div>
+        <h3>The grammar drafts a transmission — with its ground truth attached</h3>
+        <p><code>atcgen/text/grammar.py</code> draws a scenario (region EU here, with knobs for
+        readback errors, confusable callsigns, phonetic respelling) and emits three things at once:
+        the spoken text the TTS will read, the display form, and a structured entity record.
+        Nothing is ever parsed back out of the text — the label is born correct.</p>
+        <figure>
+          <div class="utt"><span class="ent cs">lufthansa four five two</span>, descend
+          <span class="ent fl">flight level one two zero</span>, information kilo,
+          <span class="ent qnh">QNH one zero one tree</span></div>
+          <div class="entrec">
+            <span class="cs">callsign · DLH452 · critical ★</span>
+            <span class="fl">flight_level · 120 · critical ★</span>
+            <span class="qnh">altimeter · 1013 · critical ★</span>
+          </div>
+          <figcaption>One utterance, annotated. Each entity carries its canonical value, its spoken
+          form (note ICAO <span class="mono">tree</span> for “three”), and a
+          <span class="mono">critical</span> flag. A critical value that later gets
+          <em>substituted</em> — heard as a different value — is the failure mode this whole system
+          is built to count and prevent; garbled filler words are not.</figcaption>
+        </figure>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h3>Kokoro reads it, cleanly and on purpose</h3>
+        <p>The TTS stage (<code>atcgen/tts/</code>) is deliberately boring: Kokoro (Apache-2.0,
+        ~82M params) behind an engine-agnostic <span class="mono">synthesize(text, rng) → waveform;
+        sample_rate = 24 kHz</span> protocol, with a curated voice pool and rate perturbation for
+        fast controller delivery. Realism is not its job — the research finding is that channel
+        irregularity closes more of the real↔synthetic gap than TTS naturalness.</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h3>The channel twin wrecks it in physical order</h3>
+        <p><code>atcgen/channel/chain.py</code> runs the clip through mic coloration and PTT
+        truncation once (the talker), then bandpass, fading, dropouts and noise per hop (the path),
+        then co-channel mixing, AGC pumping and squelch at the receiver — with the passband
+        re-applied where a real receiver would re-impose it. Every drawn parameter is recorded in a
+        <span class="mono">ChannelRecord</span>; loudness uses a per-clip RMS target at 16 kHz;
+        EBU R128 is available in <code>channel/loudness.py</code>.
+        Full structure in <a href="#channel">section 06</a>.</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h3>Two frozen teachers decide whether the label survived</h3>
+        <p>The gate (<code>atcgen/gate/</code>) plays the <em>degraded</em> waveform to
+        whisper-base.en and wav2vec2-base-960h — models that are not the student and, between
+        them, not even the same architecture family. For our clip, both recover
+        <span class="mono">one two zero</span> and the callsign; the words around them come back
+        rough (best-teacher WER 0.31). All three critical slots verified, WER within the silver
+        band → <span class="tier silver">silver</span>. Had every teacher heard a <em>different</em>
+        flight level, the clip would be <span class="tier rej">rejected</span> outright — never
+        relabeled to what the teachers heard.</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h3>Tier selection builds the training buffer</h3>
+        <p><span class="mono">select_tiers</span> admits <span class="tier gold">gold</span> and
+        <span class="tier silver">silver</span> freely and caps
+        <span class="tier adv">adversarial</span> clips — words crushed but safety numbers provable
+        — at 5% of any mix. Rejected rows stay in the manifest with their reasons and full lineage
+        (config hash, seed, profile, channel draw, teacher verdicts) but never train anything.</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h3>The clip joins a 75/25 real/synthetic mix and trains the student</h3>
+        <p><code>training/recipe.py</code> fine-tunes whisper-tiny.en on the mix (SFT), then GRPO
+        sharpens it against transcription-quality rewards (<a href="#grpo">section 09</a>).
+        Per-slice eval errors flow back to the steering layer, which decides what the
+        <em>next</em> batch of clips should look like — closing the loop without ever touching a
+        label or a weight from the outside.</p>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<!-- ============================ 03 CIRCUIT ============================ -->
+<section class="station" id="circuit">
+  <p class="eyebrow">03 · Flight plan</p>
+  <h2>One pass around the loop</h2>
+  <p>The same journey, seen from above. Five generation stages produce candidate training audio;
+  the learning side consumes it next to real audio and reports per-slice errors; two steering
+  loops close the circuit by choosing what to generate next. Nothing trains on a sample the gate
+  did not pass, and nothing upstream ever touches the locked test split.</p>
+
+  <figure>
+    <svg role="img" aria-label="End-to-end pipeline: scenario grammar to TTS to channel twin to verification gate to tiered buffer; buffer plus real corpus feed student training, evaluated on real splits, with bandit and outer-loop feedback returning to generation" viewBox="0 0 940 430">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- generation row -->
+      <text x="20" y="28" class="sv-m sv-mut">GENERATION</text>
+      <rect x="20"  y="44" width="140" height="58" rx="4" class="sv-box"/>
+      <text x="90"  y="68" text-anchor="middle" class="sv-b">scenario</text>
+      <text x="90"  y="86" text-anchor="middle" class="sv-m sv-mut">grammar + entities</text>
+
+      <rect x="212" y="44" width="140" height="58" rx="4" class="sv-box"/>
+      <text x="282" y="68" text-anchor="middle" class="sv-b">speech</text>
+      <text x="282" y="86" text-anchor="middle" class="sv-m sv-mut">Kokoro TTS</text>
+
+      <rect x="404" y="44" width="150" height="58" rx="4" class="sv-box"/>
+      <text x="479" y="68" text-anchor="middle" class="sv-b">channel twin</text>
+      <text x="479" y="86" text-anchor="middle" class="sv-m sv-mut">DSP chain 16 kHz</text>
+
+      <rect x="606" y="44" width="150" height="58" rx="4" class="sv-boxa"/>
+      <text x="681" y="68" text-anchor="middle" class="sv-b">verification gate</text>
+      <text x="681" y="86" text-anchor="middle" class="sv-m sv-mut">2 frozen teachers</text>
+
+      <rect x="800" y="34" width="120" height="78" rx="4" class="sv-box"/>
+      <text x="860" y="54" text-anchor="middle" class="sv-b">buffer</text>
+      <text x="860" y="72" text-anchor="middle" class="sv-m" style="fill: var(--gold)">gold · silver</text>
+      <text x="860" y="88" text-anchor="middle" class="sv-m" style="fill: var(--adv)">adversarial ≤5%</text>
+
+      <line x1="160" y1="73" x2="204" y2="73" class="sv-ln" marker-end="url(#ah)"/>
+      <text x="182" y="63" text-anchor="middle" class="sv-m sv-mut">spoken text</text>
+      <line x1="352" y1="73" x2="396" y2="73" class="sv-ln" marker-end="url(#ah)"/>
+      <text x="374" y="63" text-anchor="middle" class="sv-m sv-mut">24 kHz</text>
+      <line x1="554" y1="73" x2="598" y2="73" class="sv-ln" marker-end="url(#ah)"/>
+      <line x1="756" y1="73" x2="792" y2="73" class="sv-ln" marker-end="url(#ah)"/>
+
+      <!-- rejected spur -->
+      <line x1="681" y1="102" x2="681" y2="140" class="sv-ln" marker-end="url(#ah)"/>
+      <text x="694" y="128" class="sv-m" style="fill: var(--rej)">rejected + reasons (kept in manifest, never trains)</text>
+
+      <!-- learning row -->
+      <text x="20" y="205" class="sv-m sv-mut">LEARNING</text>
+      <rect x="20"  y="221" width="150" height="58" rx="4" class="sv-box"/>
+      <text x="95"  y="245" text-anchor="middle" class="sv-b">real corpus</text>
+      <text x="95"  y="263" text-anchor="middle" class="sv-m sv-mut">jacktol splits</text>
+
+      <rect x="256" y="221" width="180" height="58" rx="4" class="sv-box"/>
+      <text x="346" y="245" text-anchor="middle" class="sv-b">student training</text>
+      <text x="346" y="263" text-anchor="middle" class="sv-m sv-mut">SFT → mix → GRPO</text>
+
+      <rect x="522" y="221" width="170" height="58" rx="4" class="sv-box"/>
+      <text x="607" y="245" text-anchor="middle" class="sv-b">evaluation</text>
+      <text x="607" y="263" text-anchor="middle" class="sv-m sv-mut">entity panel, slices</text>
+
+      <rect x="756" y="221" width="164" height="58" rx="4" class="sv-boxa"/>
+      <text x="838" y="245" text-anchor="middle" class="sv-b">steering (L3)</text>
+      <text x="838" y="263" text-anchor="middle" class="sv-m sv-mut">bandit + outer loop</text>
+
+      <line x1="170" y1="250" x2="248" y2="250" class="sv-ln" marker-end="url(#ah)"/>
+      <text x="209" y="240" text-anchor="middle" class="sv-m sv-mut">75% mix</text>
+      <line x1="860" y1="112" x2="860" y2="180" class="sv-ln"/>
+      <path d="M860 180 Q860 200 840 208 L448 244" fill="none" class="sv-ln" marker-end="url(#ah)"/>
+      <text x="530" y="196" class="sv-m sv-mut">25% of mix, gated tiers only</text>
+      <line x1="436" y1="250" x2="514" y2="250" class="sv-ln" marker-end="url(#ah)"/>
+      <text x="475" y="240" text-anchor="middle" class="sv-m sv-mut">ckpt</text>
+      <line x1="692" y1="250" x2="748" y2="250" class="sv-ln" marker-end="url(#ah)"/>
+      <text x="720" y="240" text-anchor="middle" class="sv-m sv-mut">Δ/slice</text>
+
+      <!-- feedback -->
+      <path d="M838 279 L838 340 Q838 356 818 356 L110 356 Q90 356 90 340 L90 108" fill="none" class="sv-lna sv-dash" marker-end="url(#aha)"/>
+      <text x="464" y="348" text-anchor="middle" class="sv-m sv-acc">recipe knobs: scenario class · voice · rate · SNR band · channel condition · difficulty</text>
+      <path d="M479 340 L479 108" fill="none" class="sv-lna sv-dash" marker-end="url(#aha)"/>
+      <text x="491" y="290" class="sv-m sv-acc">channel config</text>
+
+      <!-- locked test -->
+      <rect x="522" y="392" width="170" height="30" rx="4" class="sv-box sv-dash" style="stroke: var(--rej)"/>
+      <text x="607" y="411" text-anchor="middle" class="sv-m" style="fill: var(--rej)">locked_test — read once per arm</text>
+      <line x1="607" y1="392" x2="607" y2="283" class="sv-ln sv-dash" marker-end="url(#ah)" style="stroke: var(--rej)"/>
+    </svg>
+    <figcaption>The full circuit. Solid arrows carry audio and checkpoints; dashed orange arrows are
+    the feedback path — the steering layer only ever adjusts <em>generation knobs</em>, never labels
+    or model weights. The locked test split (red) sits outside every loop and is read exactly once
+    per experiment arm.</figcaption>
+  </figure>
+
+  <h3>Three RL loops, kept apart on purpose</h3>
+  <p>The research proposal's central design rule: RL appears at three separate points with separate
+  rewards, because collapsing them into one adversarial loop produces label corruption and reward
+  hacking. The PoC implements two of the three honestly and defers the third.</p>
+  <div class="tblwrap"><table>
+    <tr><th>Loop</th><th>Optimizes</th><th>Here</th><th>Status</th></tr>
+    <tr><td class="mono">L1</td><td>The speech generator itself (flow-matching GRPO)</td>
+        <td>Deferred — needs the 5080 + license-cleared FM-TTS weights. Kokoro + DSP stands in.</td>
+        <td>deferred</td></tr>
+    <tr><td class="mono">L2</td><td>The ASR student</td>
+        <td><span class="mono">training/grpo.py</span> — GRPO on hypothesis groups, reward −WER with
+        hallucination / repetition / length penalties, KL to the SFT checkpoint. <strong>Validated:</strong>
+        −2.47 abs WER over SFT (p≈0).</td>
+        <td>live</td></tr>
+    <tr><td class="mono">L3</td><td>Which synthetic recipe to generate next</td>
+        <td><span class="mono">atcgen/rl/bandit.py</span> — Thompson-sampling bandit over recipes,
+        bounded by the teacher-trust hardness window; audited by counterfactual runs.
+        <strong>Audited:</strong> loses to uniform at PoC scale (<a href="#steering">§11</a>).</td>
+        <td>live</td></tr>
+  </table></div>
+</section>
+
+<!-- ============================ 04 SCENARIO ============================ -->
+<section class="station" id="scenario">
+  <p class="eyebrow">04 · Scenario service</p>
+  <h2>Text with ground truth attached</h2>
+  <p>A transcript is never a flat string. <code>atcgen/text/grammar.py</code> emits ICAO
+  phraseology (EU and US variants) together with a structured entity record, a display form
+  (<span class="mono">BAW462</span>) and the spoken form the TTS actually reads
+  (<span class="mono">speedbird four six two</span>). An LLM may propose variation later, but a
+  deterministic validator confirms callsign identity, value/unit relations, and legal ranges before
+  anything is emitted — the generator cannot invent unvalidated transcripts.</p>
+  <ul>
+    <li><code>atcgen/entities.py</code> is the shared contract consumed by the grammar, the gate,
+      and evaluation: <span class="mono">Entity(type, value, spoken, critical)</span> over callsign,
+      runway, heading, altitude, flight&nbsp;level, frequency, speed, squawk, altimeter, waypoint,
+      atis. Numeric safety entities carry <span class="mono">critical=True</span>.</li>
+    <li>Bidirectional spoken↔canonical digit conversion, including
+      <span class="mono">niner / tree / fife / fower</span>, decimals, grouped forms
+      (“one twenty seven”), ordinal runways (“26th center” → 26C), and join-insensitive telephony
+      (“aero mexico” == “aeromexico”). Grammar output needs no parsing; the parser exists for
+      teacher and student <em>hypotheses</em> and for real transcripts, where it fires on 72.7% of
+      the jacktol corpus.</li>
+    <li>Vocabulary (110 airlines, 17 stations, 30 waypoints) is harvested from the jacktol
+      <em>train split only</em> (<code>scripts/harvest_vocab.py</code>) — the real-data anchor
+      without leaking eval vocabulary.</li>
+    <li>Text sources are pluggable (<code>atcgen/text/sources.py</code>):
+      <span class="mono">grammar:region=eu</span>, local corpora, etc.</li>
+  </ul>
+</section>
+
+<!-- ============================ 05 SPEECH ============================ -->
+<section class="station" id="speech">
+  <p class="eyebrow">05 · Speech</p>
+  <h2>Clean voices, deliberately boring</h2>
+  <p>The speech stage is intentionally the least clever part: Kokoro TTS (Apache-2.0, ~82M
+  params, fast on CPU/MPS) behind an engine-agnostic protocol —
+  <span class="mono">synthesize(text, rng) → waveform; sample_rate = 24 kHz</span> — with a curated pool of
+  adult US/UK voices and rate perturbation approximating fast controller delivery
+  (<code>atcgen/tts/</code>). Realism is the <em>channel's</em> job: the research finding is that
+  acoustic irregularity closes more of the real↔synthetic gap than TTS naturalness, so polish
+  budget goes to the channel twin.</p>
+  <p>The second speech branch the proposal mandates — voice/accent conversion of real clips, the
+  strongest branch in the published ATC study (synthetic-only 24.2% vs 33.8% WER with vs without
+  it) — is deferred to a follow-up wave (kNN-VC toward real ATC speakers). The protocol interface
+  is where it will slot in, and it is the leading candidate for closing the remaining
+  synthetic-only gap (<a href="#training">§08</a>).</p>
+  <p>One documented wrinkle: Kokoro is nondeterministic on MPS (~−19 dB rendering noise at
+  identical seeds), which weakens common-random-numbers pairing in the RL harness
+  (<span class="mono">docs/known-issues.md</span>).</p>
+</section>
+
+<!-- ============================ 06 CHANNEL ============================ -->
+<section class="station" id="channel">
+  <p class="eyebrow">06 · Radio-channel twin</p>
+  <h2>A channel with physical ordering</h2>
+  <p><code>atcgen/channel/chain.py</code> runs a config-declared chain of DSP primitives with
+  per-sample randomness: each step fires with probability <span class="mono">prob</span> and draws
+  every parameter from its declared distribution; <span class="mono">ChannelRecord</span> keeps
+  what was actually applied, for the manifest. The chain is organized by <em>where each effect
+  physically happens</em>, not by config convenience:</p>
+
+  <figure>
+    <svg role="img" aria-label="Channel hop structure: source-once effects, per-hop path effects with optional relay hop, receiver-end effects; bandpass re-applied at the receiver front end and at delivery" viewBox="0 0 940 250">
+      <defs>
+        <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="ah2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <text x="20"  y="30" class="sv-m sv-mut">SOURCE_ONCE — the talker</text>
+      <rect x="20" y="42" width="200" height="88" rx="4" class="sv-box"/>
+      <text x="36" y="66" class="sv-t">mic coloration</text>
+      <text x="36" y="86" class="sv-t">PTT onset / truncation</text>
+      <text x="36" y="106" class="sv-t">handset timbre</text>
+      <text x="36" y="122" class="sv-m sv-mut">runs once, however many radios follow</text>
+
+      <line x1="220" y1="86" x2="262" y2="86" class="sv-ln" marker-end="url(#ah2)"/>
+
+      <text x="270" y="30" class="sv-m sv-mut">PER-HOP — transmit + path</text>
+      <rect x="270" y="42" width="240" height="88" rx="4" class="sv-box"/>
+      <text x="286" y="66" class="sv-t">bandpass · AM distortion · clipping</text>
+      <text x="286" y="86" class="sv-t">fading · dropouts · noise floor</text>
+      <text x="286" y="106" class="sv-t">hum · crackle · heterodyne</text>
+
+      <!-- relay loop -->
+      <path d="M486 42 Q486 6 390 6 Q294 6 294 42" fill="none" class="sv-lna sv-dash" marker-end="url(#ah2a)"/>
+      <text x="390" y="0" text-anchor="middle" class="sv-m sv-acc" dy="1">hops=2: relay re-runs path effects, fresh draws, hop-2 SNR floor forced</text>
+
+      <line x1="510" y1="86" x2="552" y2="86" class="sv-ln" marker-end="url(#ah2)"/>
+
+      <text x="560" y="30" class="sv-m sv-mut">RECEIVER_END — the receiving station</text>
+      <rect x="560" y="42" width="360" height="88" rx="4" class="sv-box"/>
+      <text x="576" y="66" class="sv-t">co-channel sum at the antenna</text>
+      <text x="576" y="86" class="sv-t">AGC pumping · squelch gate + clicks</text>
+      <text x="576" y="106" class="sv-t">delivery codec roundtrip · per-clip RMS target</text>
+
+      <!-- bandpass reapplication marks -->
+      <line x1="770" y1="42" x2="770" y2="130" class="sv-lna"/>
+      <text x="770" y="150" text-anchor="middle" class="sv-m sv-acc">BP†</text>
+      <line x1="906" y1="42" x2="906" y2="130" class="sv-lna"/>
+      <text x="906" y="150" text-anchor="middle" class="sv-m sv-acc">BP†</text>
+      <text x="560" y="178" class="sv-m sv-acc">† the same drawn bandpass — one link, one passband — re-applied at the receiver</text>
+      <text x="560" y="194" class="sv-m sv-acc">front end (after the co-channel sum) and at the delivery band limit</text>
+
+      <text x="20" y="178" class="sv-m sv-mut">clean arm: with prob clean_arm_prob the chain is bypassed</text>
+      <text x="20" y="194" class="sv-m sv-mut">except bandpass + 16 kHz resample (zero-effects reference arm)</text>
+
+      <line x1="20" y1="216" x2="920" y2="216" class="sv-ln" style="stroke: var(--line-strong)"/>
+      <text x="20" y="238" class="sv-m sv-mut">every filter is downstream of something that splatters: static, clipping products,</text>
+      <text x="470" y="238" class="sv-m sv-mut">hum and squelch gating all put energy where no receiver could pass it</text>
+    </svg>
+    <figcaption>Hop structure from <span class="mono">chain.py</span>. Stage membership is a module
+    constant — a property of the physical path, not of a profile. The orange BP marks are the
+    bandpass re-application points required by the research findings: declaring the filter once
+    would model only the transmitter's audio filter. Re-fitting the matched profile's corners as
+    cascade corners dropped the long-term-spectrum error against real audio from 7.02 to 3.35 dB
+    (L1).</figcaption>
+  </figure>
+
+  <h3>Two operating modes, plus a learned residual</h3>
+  <ul>
+    <li><strong>Mode 1 — procedural.</strong> The chain above with a capped domain-randomization
+      envelope: distortion ranges are bounded by statistics measured from real recordings
+      (unlimited randomization manufactures mislabeled data). Profiles in
+      <code>configs/mode1_*.yaml</code>.</li>
+    <li><strong>Mode 2 — per-clip calibrated.</strong> <code>atcgen/channel/learned/</code> fits
+      channel parameters to individual real calibration clips (own SDR captures under
+      <span class="mono">data/real/calibration/</span>) and replays matched presets.</li>
+    <li><strong>CUT residual (optional).</strong> A small contrastive translation model
+      (<code>learned/residual.py</code>) adds only what the DSP misses; the DSP stays auditable
+      and versioned underneath. Training it is 5080 work.</li>
+    <li>Noise beds come from real recordings (<code>atcgen/dataset/noise_harvest.py</code>);
+      loudness uses a per-clip RMS target; EBU R128 is available in
+      <code>channel/loudness.py</code>.</li>
+  </ul>
+</section>
+
+<!-- ============================ 07 GATE ============================ -->
+<section class="station" id="gate">
+  <p class="eyebrow">07 · Verification gate</p>
+  <h2>Does the audio provably say what the label claims?</h2>
+  <p>Every candidate sample faces a panel of frozen teachers — whisper-base.en (encoder-decoder,
+  language-modelled) and wav2vec2-base-960h (CTC, frame-synchronous, no decoder LM; the
+  architecturally distinct one) — <em>after</em> the channel, on the exact waveform the student
+  would train on. The verdict is <strong>reject, never relabel</strong>: a sample whose label the
+  panel cannot confirm is dropped, not rewritten to whatever the teachers heard, because
+  relabelling would launder generator errors into ground truth.</p>
+
+  <figure>
+    <svg role="img" aria-label="Gate decision plane: best-teacher word error rate against critical-slot recall, partitioned into gold, silver, adversarial and rejected regions" viewBox="0 0 620 400">
+      <defs>
+        <marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <!-- axes -->
+      <line x1="80" y1="330" x2="580" y2="330" class="sv-ln" marker-end="url(#ah3)"/>
+      <line x1="80" y1="330" x2="80" y2="40" class="sv-ln" marker-end="url(#ah3)"/>
+      <text x="330" y="368" text-anchor="middle" class="sv-t sv-mut">best-teacher WER →</text>
+      <text x="34" y="185" transform="rotate(-90 34 185)" text-anchor="middle" class="sv-t sv-mut">critical-slot recall →</text>
+
+      <!-- 50% floor line -->
+      <line x1="360" y1="330" x2="360" y2="52" class="sv-ln sv-dash" style="stroke: var(--line-strong)"/>
+      <text x="360" y="345" text-anchor="middle" class="sv-m sv-mut">50% floor</text>
+
+      <!-- thresholds -->
+      <line x1="80" y1="120" x2="360" y2="120" class="sv-ln sv-dash" style="stroke: var(--gold)"/>
+      <text x="86" y="112" class="sv-m" style="fill: var(--gold)">gold_critical_recall</text>
+      <line x1="360" y1="150" x2="580" y2="150" class="sv-ln sv-dash" style="stroke: var(--adv)"/>
+      <text x="368" y="142" class="sv-m" style="fill: var(--adv)">adversarial_critical_recall</text>
+
+      <!-- region fills -->
+      <rect x="81"  y="53"  width="130" height="66"  fill="var(--gold)" opacity="0.14"/>
+      <rect x="81"  y="121" width="278" height="208" fill="var(--silver)" opacity="0.12"/>
+      <rect x="211" y="53"  width="148" height="66"  fill="var(--silver)" opacity="0.12"/>
+      <rect x="361" y="53"  width="218" height="96"  fill="var(--adv)" opacity="0.14"/>
+      <rect x="361" y="151" width="218" height="178" fill="var(--rej)" opacity="0.10"/>
+
+      <text x="146" y="90"  text-anchor="middle" class="sv-b" style="fill: var(--gold)">GOLD</text>
+      <text x="146" y="106" text-anchor="middle" class="sv-m" style="fill: var(--gold)">near-clean read +</text>
+      <text x="146" y="118" text-anchor="middle" class="sv-m" style="fill: var(--gold)">critical slots recovered</text>
+      <text x="220" y="230" text-anchor="middle" class="sv-b" style="fill: var(--silver)">SILVER</text>
+      <text x="220" y="246" text-anchor="middle" class="sv-m" style="fill: var(--silver)">label broadly right,</text>
+      <text x="220" y="258" text-anchor="middle" class="sv-m" style="fill: var(--silver)">weaker evidence</text>
+      <text x="470" y="90"  text-anchor="middle" class="sv-b" style="fill: var(--adv)">ADVERSARIAL</text>
+      <text x="470" y="106" text-anchor="middle" class="sv-m" style="fill: var(--adv)">words crushed, safety</text>
+      <text x="470" y="118" text-anchor="middle" class="sv-m" style="fill: var(--adv)">numbers came through</text>
+      <text x="470" y="240" text-anchor="middle" class="sv-b" style="fill: var(--rej)">REJECTED</text>
+      <text x="470" y="256" text-anchor="middle" class="sv-m" style="fill: var(--rej)">+ any critical substitution,</text>
+      <text x="470" y="268" text-anchor="middle" class="sv-m" style="fill: var(--rej)">from anywhere on this plane</text>
+    </svg>
+    <figcaption>The tier decision, simplified to its two main axes (thresholds:
+    <span class="mono">gold_wer 0.25 · silver_wer 0.50 · adversarial_wer 0.90 · critical recall
+    0.5</span>). A critical slot is <em>verified</em> when any teacher recovers its exact type and
+    value — one clean read proves the audio carries it. It is <em>substituted</em> when every
+    teacher that heard the slot type heard a value the label does not contain: unanimous
+    disagreement is semantic ambiguity, and a substitution sends the sample straight to rejected
+    regardless of WER. Adversarial samples are “precious and dangerous” — capped at 5% of any
+    training mix by <span class="mono">select_tiers</span>.</figcaption>
+  </figure>
+
+  <h3>What the gate actually yields</h3>
+  <figure>
+    <svg role="img" aria-label="Stacked bar of gate tiers on the 8000-clip matrix pool: 24 percent gold, 29 percent silver, 4.8 percent adversarial, 42 percent rejected" viewBox="0 0 900 130">
+      <rect x="20"  y="30" width="207" height="36" fill="var(--gold)" opacity="0.45" stroke="var(--gold)" stroke-width="1"/>
+      <rect x="227" y="30" width="250" height="36" fill="var(--silver)" opacity="0.4" stroke="var(--silver)" stroke-width="1"/>
+      <rect x="477" y="30" width="41"  height="36" fill="var(--adv)" opacity="0.45" stroke="var(--adv)" stroke-width="1"/>
+      <rect x="518" y="30" width="362" height="36" fill="var(--rej)" opacity="0.3" stroke="var(--rej)" stroke-width="1"/>
+      <text x="123" y="53" text-anchor="middle" class="sv-b" style="fill: var(--gold)">gold 24%</text>
+      <text x="352" y="53" text-anchor="middle" class="sv-b" style="fill: var(--silver)">silver 29%</text>
+      <text x="497" y="90" text-anchor="middle" class="sv-m" style="fill: var(--adv)">adv 4.8%</text>
+      <line x1="497" y1="68" x2="497" y2="78" class="sv-ln" style="stroke: var(--adv)"/>
+      <text x="699" y="53" text-anchor="middle" class="sv-b" style="fill: var(--rej)">rejected 42%</text>
+      <text x="20" y="118" class="sv-m sv-mut">the 8,000-clip matrix_v1 pool, mode1_matched profile, grammar:region=eu · throughput ~10.6 clips/s on MPS</text>
+    </svg>
+    <figcaption>Yield on the matrix pool. Rejecting 42% is the point, not a defect: training on the
+    ungated pool instead costs +5.4 abs WER and raises the critical-number substitution rate from
+    19.5% to 25.4% (<a href="#training">§08</a>). Every row is preserved with its full gate record —
+    teacher WERs, per-entity verdicts, rejection reasons — plus lineage; downstream chooses tiers,
+    the gate never deletes evidence. <span class="mono">retier()</span> re-runs threshold sweeps
+    without re-invoking ASR.</figcaption>
+  </figure>
+</section>
+
+<!-- ============================ 08 TRAINING + MATRIX ============================ -->
+<section class="station" id="training">
+  <p class="eyebrow">08 · Student training + the experiment matrix</p>
+  <h2>SFT → mix → GRPO, budget-matched</h2>
+  <p><code>training/recipe.py</code> is glue, not a framework: every SFT arm runs the same 2,000
+  fixed optimizer steps (reusing <code>atcgen.rl.finetune_lite</code> — seeded, no HF Trainer), so
+  arms differ in <em>what</em> the student sees, never in how much gradient it gets. Fine-tuning is
+  full — PEFT LoRA is structurally incompatible with Whisper. A4 then adds a 600-step GRPO stage on
+  top of the A3 checkpoint, so the A4−A3 comparison isolates exactly what GRPO buys.</p>
+
+  <h3>The six arms (<span class="mono">scripts/run_matrix.py</span>)</h3>
+  <div class="tblwrap"><table>
+    <tr><th>Arm</th><th>Training pool</th><th>What it isolates</th></tr>
+    <tr><td class="mono">A0</td><td>zero-shot</td><td>the floor</td></tr>
+    <tr><td class="mono">A1</td><td>SFT on real-train (8k)</td><td>the real-only bar every synthetic claim is measured against</td></tr>
+    <tr><td class="mono">A2</td><td>SFT on gate-selected synthetic (gold + silver + adv ≤5%)</td><td>synthetic-only parity — published bar is within ~1.5 abs WER of A1</td></tr>
+    <tr><td class="mono">A2u</td><td>same synthetic pool, ungated</td><td>the gate's value: A2 &lt; A2u or the gate isn't earning its cost</td></tr>
+    <tr><td class="mono">A3</td><td>75% real / 25% gated synthetic</td><td>does the mix beat real-only</td></tr>
+    <tr><td class="mono">A4</td><td>A3 checkpoint + GRPO (600 steps)</td><td>GRPO's margin over SFT, no hallucination regression</td></tr>
+  </table></div>
+
+  <h3>Results on the locked test (jacktol test[500:2500], read once per arm)</h3>
+  <figure>
+    <svg role="img" aria-label="Horizontal bar chart of normalized WER on the locked test: real-only 22.40, gated synthetic only 57.28, ungated synthetic 62.68, mix 22.82, mix plus GRPO 20.35; zero-shot at 133.1 is off scale" viewBox="0 0 940 330">
+      <text x="20" y="26" class="sv-m sv-mut">normalized WER % ↓ better · A0 zero-shot = 133.1%, off this scale</text>
+
+      <!-- A1 -->
+      <text x="20" y="62" class="sv-b">A1</text>
+      <text x="52" y="62" class="sv-m sv-mut">real only</text>
+      <rect x="170" y="46" width="205" height="24" fill="var(--muted)" opacity="0.35"/>
+      <text x="383" y="63" class="sv-m">22.40</text>
+
+      <!-- A2 -->
+      <text x="20" y="112" class="sv-b">A2</text>
+      <text x="52" y="112" class="sv-m sv-mut">synth gated</text>
+      <rect x="170" y="96" width="524" height="24" fill="var(--silver)" opacity="0.35"/>
+      <text x="702" y="113" class="sv-m">57.28</text>
+
+      <!-- A2u -->
+      <text x="20" y="162" class="sv-b">A2u</text>
+      <text x="56" y="162" class="sv-m sv-mut">synth ungated</text>
+      <rect x="170" y="146" width="573" height="24" fill="var(--rej)" opacity="0.25"/>
+      <text x="751" y="163" class="sv-m">62.68</text>
+
+      <!-- A3 -->
+      <text x="20" y="212" class="sv-b">A3</text>
+      <text x="52" y="212" class="sv-m sv-mut">mix 75/25</text>
+      <rect x="170" y="196" width="209" height="24" fill="var(--muted)" opacity="0.35"/>
+      <text x="387" y="213" class="sv-m">22.82</text>
+
+      <!-- A4 -->
+      <text x="20" y="262" class="sv-b">A4</text>
+      <text x="52" y="262" class="sv-m sv-mut">mix + GRPO</text>
+      <rect x="170" y="246" width="186" height="24" fill="var(--accent)" opacity="0.85"/>
+      <text x="364" y="263" class="sv-m sv-acc">20.35</text>
+
+      <!-- reference line at A1 -->
+      <line x1="375" y1="38" x2="375" y2="282" class="sv-ln sv-dash" style="stroke: var(--line-strong)"/>
+      <text x="375" y="300" text-anchor="middle" class="sv-m sv-mut">real-only bar 22.40</text>
+
+      <text x="20" y="324" class="sv-m sv-mut">whisper-tiny.en · 2000 SFT steps each · A4 = A3 + 600 GRPO steps · paired bootstrap on shared references</text>
+    </svg>
+    <figcaption>Only the full recipe crosses the real-only line. Synthetic-only arms are far from
+    parity — expected without the VC/accent branch and FM-TTS, which are the deferred 5080 items —
+    but the gate's 5.4-point margin over ungated shows label verification carries real weight even
+    there.</figcaption>
+  </figure>
+
+  <div class="verdicts">
+    <div class="verdict">
+      <p class="v-tag">Met · headline</p>
+      <p class="v-what">Full recipe beats real-only</p>
+      <p class="v-num">A4 − A1 = −2.06 abs WER · CI [0.32, 4.23] · p = 0.012</p>
+    </div>
+    <div class="verdict">
+      <p class="v-tag">Met</p>
+      <p class="v-what">GRPO earns its 600 steps</p>
+      <p class="v-num">A4 − A3 = −2.47 abs · p ≈ 0 · insertions 1235 → 843</p>
+    </div>
+    <div class="verdict">
+      <p class="v-tag">Met</p>
+      <p class="v-what">Gate earns its cost</p>
+      <p class="v-num">A2 − A2u = −5.40 abs · p ≈ 0 · crit-sub 19.5% vs 25.4%</p>
+    </div>
+    <div class="verdict no">
+      <p class="v-tag">Not met (expected)</p>
+      <p class="v-what">Synthetic-only parity</p>
+      <p class="v-num">A2 − A1 = +34.9 abs · needs VC branch + FM-TTS (5080)</p>
+    </div>
+    <div class="verdict no">
+      <p class="v-tag">Not met (expected)</p>
+      <p class="v-what">Mix-SFT alone beats real-only</p>
+      <p class="v-num">A3 − A1 = +0.42 abs · p = 0.74 — a tie, consistent with D10 at 8k real</p>
+    </div>
+  </div>
+
+  <p>Stages are resumable — each is skipped when its output artifact exists, so rerunning the same
+  command continues after a crash. Model selection uses the model-selection slice; the locked test
+  is read once per arm at the very end, and paired bootstrap
+  (<code>atcgen/rl/stats.py</code>) decides every comparison above. Full per-arm reports and the
+  paired-bootstrap JSON live in <span class="mono">runs/matrix_v1/</span>; the same numbers are in
+  the MLBucket dashboard (<span class="mono">atcgan-matrix-v1</span>) and the
+  <a href="https://claude.ai/code/artifact/df947788-6948-4e59-83b4-b8e1af6a6959">Matrix v1
+  report</a>.</p>
+</section>
+
+<!-- ============================ 09 GRPO ============================ -->
+<section class="station" id="grpo">
+  <p class="eyebrow">09 · GRPO mechanics</p>
+  <h2>How the student sharpens itself</h2>
+  <p>SFT teaches the student what ATC audio sounds like; GRPO teaches it to stop guessing. For each
+  training clip the model samples a <em>group</em> of transcripts at temperature, scores each with
+  a reward it cannot game, and reinforces whatever beat its own group's average — anchored by a KL
+  term so it never drifts far from the SFT checkpoint.</p>
+
+  <figure>
+    <svg role="img" aria-label="GRPO flow: one gated clip is encoded once, six transcripts are sampled, each is scored by a reward combining WER with repetition, length and hallucination penalties, group-relative advantages are computed, and the policy is updated with a KL anchor to the SFT reference" viewBox="0 0 940 400">
+      <defs>
+        <marker id="ah5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="ah5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <rect x="20" y="60" width="130" height="54" rx="4" class="sv-box"/>
+      <text x="85" y="83" text-anchor="middle" class="sv-b">gated clip</text>
+      <text x="85" y="100" text-anchor="middle" class="sv-m sv-mut">+ label</text>
+
+      <line x1="150" y1="87" x2="188" y2="87" class="sv-ln" marker-end="url(#ah5)"/>
+
+      <rect x="192" y="60" width="140" height="54" rx="4" class="sv-box"/>
+      <text x="262" y="83" text-anchor="middle" class="sv-b">encoder</text>
+      <text x="262" y="100" text-anchor="middle" class="sv-m sv-mut">run once, shared</text>
+
+      <line x1="332" y1="87" x2="370" y2="87" class="sv-ln" marker-end="url(#ah5)"/>
+      <text x="351" y="74" text-anchor="middle" class="sv-m sv-mut">×G</text>
+
+      <!-- hypothesis group -->
+      <text x="376" y="30" class="sv-m sv-mut">G=6 SAMPLED TRANSCRIPTS · T=0.9</text>
+      <rect x="376" y="42"  width="330" height="26" rx="3" class="sv-box"/>
+      <text x="386" y="59" class="sv-m">descend flight level one two zero</text>
+      <text x="716" y="59" class="sv-m" style="fill: var(--ok)">r −0.00</text>
+      <rect x="376" y="74"  width="330" height="26" rx="3" class="sv-box"/>
+      <text x="386" y="91" class="sv-m">descend flight level one too zero</text>
+      <text x="716" y="91" class="sv-m sv-mut">r −0.17</text>
+      <rect x="376" y="106" width="330" height="26" rx="3" class="sv-box"/>
+      <text x="386" y="123" class="sv-m">descend level one two zero</text>
+      <text x="716" y="123" class="sv-m sv-mut">r −0.14</text>
+      <rect x="376" y="138" width="330" height="26" rx="3" class="sv-box"/>
+      <text x="386" y="155" class="sv-m">descend flight level one two zero zero zero</text>
+      <text x="716" y="155" class="sv-m sv-mut">r −0.42 rep</text>
+      <rect x="376" y="170" width="330" height="26" rx="3" class="sv-box"/>
+      <text x="386" y="187" class="sv-m">climb flight level one two zero</text>
+      <text x="716" y="187" class="sv-m sv-mut">r −0.17</text>
+      <rect x="376" y="202" width="330" height="26" rx="3" class="sv-box" style="stroke: var(--rej)"/>
+      <text x="386" y="219" class="sv-m sv-mut">(empty)</text>
+      <text x="716" y="219" class="sv-m" style="fill: var(--rej)">r −1.00 hal</text>
+
+      <text x="376" y="252" class="sv-m sv-mut">r = −(WER + w·repetition + w·length) · empty/degenerate → hallucination penalty</text>
+
+      <!-- advantage box -->
+      <line x1="790" y1="135" x2="812" y2="135" class="sv-ln" marker-end="url(#ah5)"/>
+      <rect x="816" y="94" width="104" height="82" rx="4" class="sv-boxa"/>
+      <text x="868" y="120" text-anchor="middle" class="sv-b">advantage</text>
+      <text x="868" y="140" text-anchor="middle" class="sv-m">Aᵢ = (rᵢ−μ)/σ</text>
+      <text x="868" y="158" text-anchor="middle" class="sv-m sv-mut">per group</text>
+
+      <!-- update box -->
+      <path d="M868 176 L868 296 L716 296" fill="none" class="sv-lna" marker-end="url(#ah5a)"/>
+      <rect x="376" y="270" width="336" height="54" rx="4" class="sv-boxa"/>
+      <text x="544" y="292" text-anchor="middle" class="sv-b">policy step, lr 2e-6</text>
+      <text x="544" y="311" text-anchor="middle" class="sv-m">Σ Aᵢ ∇log π(hypᵢ) − β·KL(π ‖ π_SFT), β=0.04</text>
+
+      <text x="20" y="360" class="sv-m sv-mut">shared-encoder expansion: one encode fans out to all G decodes — 0.78 s vs 4.56 s per step at batch 4</text>
+      <text x="20" y="380" class="sv-m" style="fill: var(--rej)">trap: Whisper's generate() strips the decoder prompt, silently corrupting teacher-forced scoring —</text>
+      <text x="20" y="396" class="sv-m" style="fill: var(--rej)">ensure_decoder_prompt() re-inserts it, and a logp_token_mean canary alarms if scored logprobs go flat</text>
+    </svg>
+    <figcaption>One GRPO step from <span class="mono">training/grpo.py</span>. The reward is
+    per-component by design — a single scalar hides reward hacking, so WER, repetition, length and
+    hallucination are logged separately to <span class="mono">metrics.jsonl</span>. Because the
+    advantage is <em>group-relative</em>, the model is only ever compared to itself on the same
+    clip, which is what makes the signal usable at whisper-tiny scale. The effect on the matrix:
+    −2.47 abs WER over the SFT checkpoint, with insertions falling 1235 → 843 — GRPO's penalties
+    directly attack Whisper's hallucination failure mode.</figcaption>
+  </figure>
+</section>
+
+<!-- ============================ 10 EVAL + SPLITS ============================ -->
+<section class="station" id="evalsec">
+  <p class="eyebrow">10 · Evaluation + data discipline</p>
+  <h2>Entity metrics gate releases, not aggregate WER</h2>
+  <p>In ATC, command accuracy and WER decouple — one wrong digit is operationally serious while
+  five garbled filler words are not. <code>atcgen/eval/entity_metrics.py</code> therefore reports,
+  per arm and per slice: WER with S/D/I decomposition, exact callsign accuracy, per-type slot F1,
+  the <strong>critical-number substitution rate</strong>, and hallucination metrics. Text
+  normalization is frozen in <code>training/normalize.py</code> so arms stay comparable, and
+  <code>training/evaluate.py --hyps-out</code> writes per-utterance hypotheses so any two arms can
+  be paired-bootstrapped after the fact.</p>
+
+  <figure>
+    <svg role="img" aria-label="Split map of the jacktol corpus: train indices 0 to 8000 are real-train, 8000 to 9000 reward-validation, 9000 to 10000 model-selection; test 0 to 500 is spent, 500 to 2500 is the locked test" viewBox="0 0 900 210">
+      <text x="20" y="26" class="sv-m sv-mut">jacktol train</text>
+      <rect x="20"  y="38" width="640" height="44" class="sv-box"/>
+      <rect x="660" y="38" width="80"  height="44" class="sv-box" style="fill: var(--accent-wash)"/>
+      <rect x="740" y="38" width="80"  height="44" class="sv-box" style="fill: var(--accent-wash)"/>
+      <text x="340" y="58" text-anchor="middle" class="sv-b">real-train</text>
+      <text x="340" y="74" text-anchor="middle" class="sv-m sv-mut">[0:8000] · SFT pool + vocab harvest</text>
+      <text x="700" y="58" text-anchor="middle" class="sv-m">reward-val</text>
+      <text x="700" y="74" text-anchor="middle" class="sv-m sv-mut">[8000:9000]</text>
+      <text x="780" y="58" text-anchor="middle" class="sv-m">model-select</text>
+      <text x="780" y="74" text-anchor="middle" class="sv-m sv-mut">[9000:10000]</text>
+
+      <text x="20" y="126" class="sv-m sv-mut">jacktol test</text>
+      <rect x="20"  y="138" width="130" height="44" class="sv-box" style="stroke: var(--muted)"/>
+      <rect x="150" y="138" width="520" height="44" class="sv-box" style="stroke: var(--rej); stroke-width: 1.6"/>
+      <text x="85"  y="158" text-anchor="middle" class="sv-m sv-mut">[0:500] spent</text>
+      <text x="85"  y="174" text-anchor="middle" class="sv-m sv-mut">(rl_verify)</text>
+      <text x="410" y="158" text-anchor="middle" class="sv-b" style="fill: var(--rej)">locked_test [500:2500]</text>
+      <text x="410" y="174" text-anchor="middle" class="sv-m" style="fill: var(--rej)">read once per arm, at the very end</text>
+      <text x="20" y="204" class="sv-m sv-mut">reward-val feeds L3 + GRPO dev · model-select picks checkpoints · locked_test decides — no split touches anything upstream of its role</text>
+    </svg>
+    <figcaption>Deterministic disjoint slices pinned by <span class="mono">atcgen/dataset/splits.py</span>
+    (disjointness is asserted at import time). jacktol is utterance-segmented, so speaker/callsign
+    overlap across its train/test is possible — prohibited in production split design, accepted and
+    documented for the PoC. The harness swaps to Kevin's own transcribed KSDL/KSLE set when it
+    arrives, with no other changes.</figcaption>
+  </figure>
+
+  <h3>Generator-fidelity tiers</h3>
+  <p>Separately from student metrics, <code>atcgen/eval/harness.py</code> regression-tests the
+  <em>generator</em>: tier 0 generation stats, tier 1 channel statistics (LTAS and friends) against
+  real references, then embedding distance and a real-vs-synthetic probe on frozen WavLM features.
+  At the current reference size the probe is saturated <em>upward</em> — it reads 0.98–1.00 for
+  everything, clean TTS included — so it cannot rank channel work until a ~1k labeled real set
+  arrives. <strong>KID on speech embeddings (plus LTAS&nbsp;L1) is the working fidelity
+  headline</strong>, tracked as a trend rather than a release gate; calibrated-mode numbers are
+  additionally in-sample for the channel fit (see <span class="mono">docs/known-issues.md</span>).</p>
+</section>
+
+<!-- ============================ 11 STEERING ============================ -->
+<section class="station" id="steering">
+  <p class="eyebrow">11 · Steering</p>
+  <h2>Choosing what to generate next</h2>
+  <p>Two loops sit above the pipeline. The <strong>outer config loop</strong>
+  (<code>atcgen/rl/loop.py</code>, CEM with a random-search control) tunes generator configuration
+  against a whisper-tiny WER reward, built for iterations that cost most of an hour:
+  crash-idempotent (<span class="mono">trials.jsonl</span> + optimizer checkpoints, restart resumes
+  at the next un-evaluated trial), failed candidates dropped from the batch rather than fed as
+  sentinel rewards, and the hand-tuned config seeded as trial 0 so every reward reads against the
+  thing to beat. (Its <span class="mono">runs/rl_v1</span> best config predates the channel-physics
+  re-fit and needs a re-run.)</p>
+  <p>The <strong>L3 recipe bandit</strong> (<code>atcgen/rl/bandit.py</code>) decides which of 12
+  recipe buckets — scenario class, voice, rate, SNR band, channel condition, difficulty — to
+  generate from next. Per-action retraining is impossible, so each pull scores its batch with a
+  cheap proxy:</p>
+
+  <figure>
+    <svg role="img" aria-label="Hardness window: samples kept only when teacher WER is below tau-1 and student WER falls between tau-2 and tau-3" viewBox="0 0 760 220">
+      <defs>
+        <marker id="ah4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <text x="30" y="28" class="sv-t sv-mut">teacher axis — is the label trustworthy?</text>
+      <line x1="30" y1="58" x2="730" y2="58" class="sv-ln" marker-end="url(#ah4)"/>
+      <rect x="30" y="48" width="300" height="20" fill="var(--accent)" opacity="0.16"/>
+      <line x1="330" y1="42" x2="330" y2="74" class="sv-lna"/>
+      <text x="330" y="36" text-anchor="middle" class="sv-m sv-acc">τ₁ = 0.8</text>
+      <text x="180" y="90" text-anchor="middle" class="sv-m">WER_teacher &lt; τ₁ — eligible</text>
+      <text x="530" y="90" text-anchor="middle" class="sv-m sv-mut">teacher can't read it → dropped outright</text>
+      <text x="530" y="106" text-anchor="middle" class="sv-m sv-mut">(never kept as a “hard” example)</text>
+
+      <text x="30" y="140" class="sv-t sv-mut">student axis — is it worth targeting?</text>
+      <line x1="30" y1="170" x2="730" y2="170" class="sv-ln" marker-end="url(#ah4)"/>
+      <rect x="260" y="160" width="240" height="20" fill="var(--accent)" opacity="0.16"/>
+      <line x1="260" y1="154" x2="260" y2="186" class="sv-lna"/>
+      <line x1="500" y1="154" x2="500" y2="186" class="sv-lna"/>
+      <text x="260" y="148" text-anchor="middle" class="sv-m sv-acc">τ₂ (per student!)</text>
+      <text x="500" y="148" text-anchor="middle" class="sv-m sv-acc">τ₃ = 1.2</text>
+      <text x="140" y="202" text-anchor="middle" class="sv-m sv-mut">too easy → spillover</text>
+      <text x="380" y="202" text-anchor="middle" class="sv-m">in window → selected</text>
+      <text x="620" y="202" text-anchor="middle" class="sv-m sv-mut">too hard → spillover</text>
+    </svg>
+    <figcaption>The hardness window is the safe form of hard-case mining. The τ₁ bound is
+    structural, not stylistic: student hardness selects <em>which samples to keep</em> and never
+    reaches a generator objective — rewarding student failure without the teacher bound is how a
+    generator learns to garble “seven” into something mishearable. In-window counts are the
+    Bernoulli reward updating the Beta posteriors. τ₂ must be recalibrated per student checkpoint:
+    the zero-shot value (0.40) starved the window to 3.3% in-window against the A4 student;
+    measuring the student first and setting τ₂ = 0.15 restored 19.4%.</figcaption>
+  </figure>
+
+  <h3>The counterfactual audit — and what it found</h3>
+  <p>The proxy is not trusted. Every <span class="mono">counterfactual_every</span> pulls, the same
+  frozen init is fine-tuned twice — once on the bandit-selected buffer, once on a uniform mixture —
+  and both are scored on the real reward-validation slice. That ΔWER is the exit-bar number, and at
+  PoC scale it came back <strong>negative in every design</strong>:</p>
+
+  <figure>
+    <svg role="img" aria-label="Diverging bars showing the counterfactual delta of bandit-selected versus uniform synthetic data: minus 2.5 points in the naive design and minus 0.6 in the replay-corrected design, both favoring uniform" viewBox="0 0 760 210">
+      <line x1="520" y1="30" x2="520" y2="150" class="sv-ln" style="stroke: var(--line-strong)"/>
+      <text x="520" y="20" text-anchor="middle" class="sv-m sv-mut">Δ = 0</text>
+      <text x="640" y="46" text-anchor="middle" class="sv-m sv-mut">bandit wins →</text>
+      <text x="330" y="46" text-anchor="middle" class="sv-m sv-mut">← uniform wins</text>
+
+      <rect x="220" y="62" width="300" height="26" fill="var(--rej)" opacity="0.3" stroke="var(--rej)" stroke-width="1"/>
+      <text x="212" y="80" text-anchor="end" class="sv-m" style="fill: var(--rej)">−2.5</text>
+      <text x="530" y="80" class="sv-m sv-mut">synth-only design, recalibrated τ₂</text>
+
+      <rect x="452" y="104" width="68" height="26" fill="var(--rej)" opacity="0.3" stroke="var(--rej)" stroke-width="1"/>
+      <text x="444" y="122" text-anchor="end" class="sv-m" style="fill: var(--rej)">−0.6</text>
+      <text x="530" y="122" class="sv-m sv-mut">replay-corrected (1:1 real mix, invariant 6)</text>
+
+      <text x="30" y="180" class="sv-m sv-mut">abs WER points on reward_val, selected vs uniform, same frozen A4 init, same steps ·</text>
+      <text x="30" y="198" class="sv-m sv-mut">in the replay design both arms also regressed vs the untouched init (19.8% → 22.0 / 21.4)</text>
+    </svg>
+    <figcaption>Hardness-selected synthetic data lost to uniform sampling in counterfactuals — the
+    P4c exit bar is honestly <strong>not met</strong> at PoC scale. The diagnosis: the A4 student is
+    <em>saturated</em> on this synthetic distribution — its median WER on synth (0.096) is far
+    better than the frozen teacher's (0.561), so “what the student finds hard” no longer marks
+    useful data, and any further fine-tuning on it regresses the checkpoint. The harness did its
+    job: it refused a proxy that had stopped meaning anything. The bandit's genuine win was
+    diagnostic — its posterior localized <span class="mono">us_routine</span> as the EU-trained
+    student's weakest slice. Next honest test: a fresh SFT init, or hard-case mining on real
+    audio.</figcaption>
+  </figure>
+</section>
+
+<!-- ============================ 12 INVARIANTS ============================ -->
+<section class="station" id="invariants">
+  <p class="eyebrow">12 · Limitations section</p>
+  <h2>Invariants — violations block merge</h2>
+  <ol class="rule-list">
+    <li>Judge/teacher ASR ≠ student ASR; teachers frozen, at least one architecturally distinct
+      (here: wav2vec2 CTC vs. the whisper family).</li>
+    <li>No sample trains or rewards anything without passing the gate; failed samples are
+      <strong>rejected, never relabeled</strong>.</li>
+    <li>Adversarial tier ≤ 5% of any training mix.</li>
+    <li>Student-hardness signals never reach a generator objective; hardness lives in L3, bounded
+      by <span class="mono">WER_teacher &lt; τ₁</span>.</li>
+    <li>Real splits are mutually disjoint and disjoint from all upstream fitting;
+      <span class="mono">locked_test</span> is read once per arm.</li>
+    <li>Synthetic data is always evaluated mixed with real replay, never alone, when the question
+      is “does it help the student” — the replay-corrected counterfactual exists because of this
+      rule.</li>
+    <li>Releases gate on the entity/safety panel, never on aggregate WER alone.</li>
+    <li>No LiveATC audio in any training path; no CC-BY-NC checkpoints in the product.</li>
+    <li>Every dataset row carries lineage: config hash, seed, profile, text source, channel
+      parameters, gate verdicts.</li>
+  </ol>
+</section>
+
+<!-- ============================ 13 MODULE MAP ============================ -->
+<section class="station" id="modules">
+  <p class="eyebrow">13 · Parts catalog</p>
+  <h2>Module map</h2>
+  <div class="tblwrap"><table>
+    <tr><th>Path</th><th>Role</th></tr>
+    <tr><td class="mono">atcgen/text/ · entities.py</td><td>Scenario grammar, lexicon, pluggable text sources; shared entity schema + spoken↔canonical parsing + scoring</td></tr>
+    <tr><td class="mono">atcgen/tts/</td><td>Kokoro TTS behind an engine-agnostic protocol; voice pool + rate augmentation</td></tr>
+    <tr><td class="mono">atcgen/channel/</td><td>DSP primitives, the staged chain (Mode 1), per-clip calibration + presets (Mode 2), CUT residual, loudness</td></tr>
+    <tr><td class="mono">atcgen/gate/</td><td>Two-teacher verification gate: tiers, entity verdicts, retier sweeps, lineage</td></tr>
+    <tr><td class="mono">atcgen/dataset/</td><td>Dataset build + manifest, real-corpus access, splits registry, noise harvesting</td></tr>
+    <tr><td class="mono">atcgen/eval/</td><td>Entity panel, channel stats, embedding distance (KID), probe, regression harness, reports</td></tr>
+    <tr><td class="mono">atcgen/rl/</td><td>Outer config loop (CEM vs. random), L3 Thompson bandit + hardness window, paired bootstrap, lightweight fine-tune used by all training</td></tr>
+    <tr><td class="mono">training/</td><td>Staged student recipe, GRPO, frozen normalization, evaluation CLI</td></tr>
+    <tr><td class="mono">scripts/</td><td>CLIs: generate_dataset, gate_dataset, run_matrix, rl_loop, rl_recipe_bandit, harvest_vocab, eval_synthetic, auditions</td></tr>
+    <tr><td class="mono">configs/</td><td>Channel/generation profiles (mode1_default / matched / wide, mode2_default, ablations)</td></tr>
+  </table></div>
+</section>
+
+<!-- ============================ DEVIATIONS ============================ -->
+<section class="station">
+  <p class="eyebrow">Deferred items</p>
+  <h2>PoC deviations, and the queue behind them</h2>
+  <p>Deliberate, documented, and honest about hardware and licensing — deferred, not stubbed:</p>
+  <ul>
+    <li><strong>Generator class (L1).</strong> Kokoro + DSP/CUT stands in for flow-matching TTS with
+      generator GRPO; FM training needs the 5080 and license-cleared pretraining data (public
+      F5-TTS weights are CC-BY-NC).</li>
+    <li><strong>VC/accent branch.</strong> Deferred; the biggest published lever for synthetic-only
+      parity, and the top candidate for the next round.</li>
+    <li><strong>Judge diversity + strength.</strong> Two teachers instead of a Canary-class panel.
+      Callsign verification is currently teacher-bounded (~0.16 recall on degraded audio), not
+      parser-bounded — stronger teachers directly raise gold yield.</li>
+    <li><strong>Stale outer-loop config.</strong> <span class="mono">runs/rl_v1</span>'s best
+      config predates the channel-physics re-fit; the CEM search needs a re-run before its numbers
+      are quotable.</li>
+    <li><strong>Split leakage.</strong> jacktol's utterance segmentation permits speaker/callsign
+      overlap across train/test; accepted for the PoC, prohibited in production, replaced by the
+      user's own transcribed set later.</li>
+  </ul>
+</section>
+
+<!-- ============================ FOOTER ============================ -->
+<footer>
+  <pre><code># generate + gate a dataset
+uv run python scripts/generate_dataset.py --config configs/mode1_matched.yaml \
+    --n-samples 500 --out runs/demo --seed 7 --text "grammar:region=eu"
+uv run python scripts/gate_dataset.py --dataset runs/demo
+
+# the full validation matrix (A0 … A4)
+uv run python scripts/run_matrix.py --out runs/matrix_v1
+
+# L3 recipe bandit
+uv run python scripts/rl_recipe_bandit.py --pulls 30 --out runs/bandit_v1</code></pre>
+  <p>Sources: <span class="mono">README.md</span> ·
+  <span class="mono">docs/research-findings.md</span> (the Aug 2026 engineering proposal) ·
+  <span class="mono">docs/plans/research-integration.md</span> (the PoC mapping) ·
+  <span class="mono">runs/matrix_v1/summary_locked_test.json</span> · module docstrings in
+  <span class="mono">atcgen/</span> and <span class="mono">training/</span>. Companion pages:
+  <a href="https://claude.ai/code/artifact/df947788-6948-4e59-83b4-b8e1af6a6959">Matrix v1 report</a> ·
+  MLBucket dashboard (localhost:8484, projects <span class="mono">atcgan-*</span>).
+  Pre-release: schemas and configs may change freely (<span class="mono">AGENTS.md</span>).</p>
+</footer>
+
+</div>
+</html>
