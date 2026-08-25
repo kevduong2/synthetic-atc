@@ -133,7 +133,8 @@ PHONETIC_ALPHABET = {
 LETTER_WORDS = {word: letter for letter, word in PHONETIC_ALPHABET.items()}
 LETTER_WORDS.update({"alfa": "A", "juliet": "J", "whisky": "W", "x-ray": "X"})
 
-RUNWAY_SIDES = {"left": "L", "right": "R", "center": "C", "centre": "C"}
+RUNWAY_SIDES = {"left": "L", "right": "R", "center": "C", "centre": "C",
+                "l": "L", "r": "R", "c": "C"}
 SIDE_WORDS = {"L": "left", "R": "right", "C": "center"}
 
 
@@ -188,11 +189,18 @@ def feet_to_words(feet: int, atc_variants: bool = False) -> str:
     return " ".join(parts) if parts else table["0"]
 
 
-_TOKEN_RE = re.compile(r"[a-z]+|\d+(?:\.\d+)?")
+#: Numerals first, so an ordinal suffix binds to its digits rather than
+#: splitting off as a word ("runway 26th center").
+_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?(?:st|nd|rd|th)?|[a-z]+")
+_ORDINAL_SUFFIXES = ("st", "nd", "rd", "th")
 
 
 def tokenize(text: str) -> list[str]:
-    tokens = _TOKEN_RE.findall(text.lower().replace("-", " "))
+    tokens = []
+    for token in _TOKEN_RE.findall(text.lower().replace("-", " ")):
+        if token[0].isdigit() and token.endswith(_ORDINAL_SUFFIXES):
+            token = token[:-2]
+        tokens.append(token)
     folded: list[str] = []
     for token in tokens:
         # "x ray" is one letter
@@ -386,8 +394,10 @@ def load_airlines(vocab_path: str | Path | None = DEFAULT_VOCAB_PATH) -> dict[st
         blob = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return airlines
+    builtin = {joined_key(phrase): code for phrase, code in DEFAULT_AIRLINES.items()}
     for phrase, entry in (blob.get("airlines") or {}).items():
         code = entry.get("icao") if isinstance(entry, dict) else None
+        code = builtin.get(joined_key(phrase), code)
         if code:
             airlines.setdefault(phrase, code)
     return airlines
@@ -407,10 +417,25 @@ def telephony_code(phrase: str) -> str:
     return (code + "".join(words))[:3]
 
 
-def _airline_index(airlines: dict[str, str]) -> list[tuple[tuple[str, ...], str]]:
-    """Telephony phrases as token tuples, longest first (longest-match wins)."""
-    index = [(tuple(phrase.split()), code) for phrase, code in airlines.items()]
-    index.sort(key=lambda item: len(item[0]), reverse=True)
+#: Longest telephony name in words; bounds the join window in the scanner.
+AIRLINE_MAX_WORDS = 4
+
+
+def joined_key(phrase: str) -> str:
+    """Telephony name with word boundaries removed: 'aero mexico' -> 'aeromexico'.
+
+    Speech recognizers split and join these names freely -- "aeromexico" /
+    "aero mexico", "k l m" / "klm", "wizz air" / "wizzair" -- and all of them
+    have to reach the same designator.
+    """
+    return "".join(phrase.split())
+
+
+def _airline_index(airlines: dict[str, str]) -> dict[str, str]:
+    """Join-insensitive lookup. Earlier entries win, so builtin beats harvested."""
+    index: dict[str, str] = {}
+    for phrase, code in airlines.items():
+        index.setdefault(joined_key(phrase), code)
     return index
 
 
@@ -432,8 +457,7 @@ def default_airlines() -> dict[str, str]:
     return _DEFAULT_TABLE
 
 
-def _index_for(airlines: dict[str, str] | None
-               ) -> list[tuple[tuple[str, ...], str]]:
+def _index_for(airlines: dict[str, str] | None) -> dict[str, str]:
     global _DEFAULT_INDEX
     if airlines is not None:
         return _airline_index(airlines)
@@ -524,11 +548,19 @@ def check_entity(entity: Entity) -> str | None:
 _RUNWAY_WORDS = {"runway", "rwy"}
 _HEADING_WORDS = {"heading"}
 _SQUAWK_WORDS = {"squawk", "sqawk"}
-_SPEED_WORDS = {"speed"}
+_SPEED_WORDS = {"speed", "speeds"}
 _QNH_WORDS = {"qnh"}
 _ALTIMETER_WORDS = {"altimeter"}
 _ATIS_WORDS = {"information", "atis"}
-_ALTITUDE_WORDS = {"altitude"}
+#: A bare numeral is an altitude only next to a vertical-clearance verb --
+#: ASR drops "feet" and writes "climb and maintain 1,500".
+_ALTITUDE_WORDS = {"altitude", "climb", "climbing", "descend", "descending",
+                   "maintain", "maintaining"}
+#: Fillers that may sit between an anchor word and its value.
+_FILLERS = ("to", "and", "at", "of")
+#: Unit suffixes that anchor a value on their own.
+_FEET_SUFFIX = {"feet", "foot", "ft"}
+_KNOTS_SUFFIX = {"knots", "knot", "kt", "kts"}
 _WAYPOINT_ANCHORS = {"direct", "overhead", "abeam"}
 #: Never mistaken for a waypoint after "direct".
 _WAYPOINT_STOPWORDS = {
@@ -605,10 +637,14 @@ def extract_entities(text: str, airlines: dict[str, str] | None = None) -> list[
             position += 1
             continue
         code, width = None, 0
-        for phrase, icao in index:
-            end = position + len(phrase)
-            if tuple(tokens[position:end]) == phrase and free(position, end):
-                code, width = icao, len(phrase)
+        for span in range(min(AIRLINE_MAX_WORDS, len(tokens) - position), 0, -1):
+            end = position + span
+            words = tokens[position:end]
+            if not all(word.isalpha() for word in words) or not free(position, end):
+                continue
+            code = index.get("".join(words))
+            if code is not None:
+                width = span
                 break
         # "taxi via delta, november five nine six" is a taxiway followed by a
         # tail number, not a Delta flight: a GA prefix ends the airline match.
@@ -666,7 +702,8 @@ def extract_entities(text: str, airlines: dict[str, str] | None = None) -> list[
         elif token in _SQUAWK_WORDS and run and len(run.digits) == 4:
             entity = _finish("squawk", run.digits, tokens, *span)
         elif token in _SPEED_WORDS:
-            if run is None and tokens[position + 1:position + 2] == ["to"]:
+            if run is None and tokens[position + 1:position + 2] \
+                    and tokens[position + 1] in _FILLERS:
                 run = runs.get(position + 2)
                 span = (position + 2, run.end if run else position + 2)
             if run and 2 <= len(run.digits) <= 3:
@@ -675,8 +712,17 @@ def extract_entities(text: str, airlines: dict[str, str] | None = None) -> list[
             entity = _finish("altimeter", "Q" + run.digits, tokens, *span)
         elif token in _ALTIMETER_WORDS and run and len(run.digits) == 4:
             entity = _finish("altimeter", "A" + run.digits, tokens, *span)
-        elif token in _ALTITUDE_WORDS and run and run.value:
-            entity = _finish("altitude", f"{run.value}ft", tokens, *span)
+        elif token in _ALTITUDE_WORDS:
+            if run is None and tokens[position + 1:position + 2] \
+                    and tokens[position + 1] in _FILLERS:
+                run = runs.get(position + 2)
+                span = (position + 2, run.end if run else position + 2)
+            # "maintain 250 knots" is a speed wearing an altitude's anchor
+            if run and run.value and tokens[run.end:run.end + 1] != [] \
+                    and tokens[run.end] in _KNOTS_SUFFIX:
+                run = None
+            if run and run.value:
+                entity = _finish("altitude", f"{run.value}ft", tokens, *span)
         elif token in _ATIS_WORDS and tokens[position + 1:position + 2] \
                 and tokens[position + 1] in LETTER_WORDS:
             span = (position + 1, position + 2)
@@ -696,7 +742,21 @@ def extract_entities(text: str, airlines: dict[str, str] | None = None) -> list[
 
         keep(entity, span, position)
 
-    # 4. Unanchored altitudes: a number run built with thousand/hundred is an
+    # 4. A unit suffix anchors its own value: "2,000 feet", "260 knots".
+    #    The legal ranges do the filtering -- a reported wind of "four knots"
+    #    is far below the 60 kt floor, so it never reads as an airspeed.
+    for start, run in sorted(runs.items()):
+        following = tokens[run.end] if run.end < len(tokens) else ""
+        if not free(run.start, run.end):
+            continue
+        if following in _FEET_SUFFIX and run.value:
+            keep(_finish("altitude", f"{run.value}ft", tokens, run.start, run.end),
+                 (run.start, run.end), run.start)
+        elif following in _KNOTS_SUFFIX and run.digits:
+            keep(_finish("speed", str(int(run.digits)), tokens, run.start, run.end),
+                 (run.start, run.end), run.start)
+
+    # 5. Unanchored altitudes: a number run built with thousand/hundred is an
     #    altitude on its own ("climb and maintain four thousand five hundred").
     for start, run in sorted(runs.items()):
         if run.digits or not run.value or not free(run.start, run.end):

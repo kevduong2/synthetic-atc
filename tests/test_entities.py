@@ -148,6 +148,72 @@ def test_default_airline_table_extends_the_builtin_one():
     assert all(table[phrase] == code for phrase, code in DEFAULT_AIRLINES.items())
 
 
+# ---------------------------------------------------------------------------
+# Numeral-form hypotheses (what ASR teachers actually write)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("hyp,expected", [
+    # ordinals: whisper writes "26th" where the controller said "two six"
+    ("Finding up runway 26th center", ("runway", "26C")),
+    ("cleared to land runway 1st left", ("runway", "01L")),
+    # the side as a bare letter rather than a word
+    ("all short of runway 20L", ("runway", "20L")),
+    ("runway 03 R line up and wait", ("runway", "03R")),
+    # bare numeral altitudes, with and without a thousands comma
+    ("Climb and maintain 1500.", ("altitude", "1500ft")),
+    ("The send and maintain 2,500 for Singapore", ("altitude", "2500ft")),
+    ("descend to 4,000", ("altitude", "4000ft")),
+    # a unit suffix anchors on its own
+    ("Open to 2000 feet.", ("altitude", "2000ft")),
+    ("I'm going 855, reduce heat to 260 knots.", ("speed", "260")),
+    ("We use speeds 180 knots.", ("speed", "180")),
+    # punctuated idents
+    ("Austrian 6-2-1-2, reduce speed to 270 knots", ("callsign", "AUA6212")),
+    ("KLM 3996, proceed direct lomki", ("callsign", "KLM3996")),
+    ("China Southern 8 Romeo Foxtrot", ("callsign", "CSN8RF")),
+    ("maintaining front level 280", ("flight_level", "FL280")),
+    ("contact Frankfort radar 126 decimal 865", ("frequency", "126.865")),
+    ("turn right heading 030", ("heading", "030")),
+    ("Korean Air 7217, squawk 4711", ("squawk", "4711")),
+])
+def test_numeral_form_hypotheses(hyp, expected):
+    assert expected in types(extract_entities(hyp))
+
+
+@pytest.mark.parametrize("hyp,joined,expected", [
+    ("Aero Mexico 3847 climbing", "aeromexico 3847 climbing", "AMX3847"),
+    ("k l m 3996 direct", "klm 3996 direct", "KLM3996"),
+    ("wizz air 421 roger", "wizzair 421 roger", "WZZ421"),
+    ("sky travel 670 standby", "skytravel 670 standby", "SKV670"),
+])
+def test_telephony_matches_however_the_words_are_split(hyp, joined, expected):
+    """ASR splits and joins telephony names freely; both must reach one code."""
+    assert ("callsign", expected) in types(extract_entities(hyp))
+    assert ("callsign", expected) in types(extract_entities(joined))
+
+
+def test_knots_beats_an_altitude_anchor():
+    """"maintain 250 knots" is a speed wearing an altitude's anchor word."""
+    assert types(extract_entities("maintain 250 knots")) == [("speed", "250")]
+
+
+def test_reported_wind_is_still_not_an_airspeed():
+    """The 60 kt floor is what makes the bare "knots" anchor safe."""
+    text = "csa nine two six cleared to land wind two zero zero degrees four knots"
+    assert types(extract_entities(text)) == [("callsign", "CSA926")]
+
+
+def test_harvested_name_inherits_a_builtin_designator(tmp_path):
+    """'finn air' must not get its own code when 'finnair' is already FIN."""
+    path = tmp_path / "anchor.json"
+    path.write_text(json.dumps(
+        {"airlines": {"finn air": {"count": 31, "icao": "FIA"}}}))
+    airlines = load_airlines(path)
+    assert airlines["finn air"] == airlines["finnair"] == "FIN"
+    assert ("callsign", "FIN421") in types(
+        extract_entities("finn air 421 roger", airlines))
+
+
 def test_entity_spoken_is_the_substring_that_says_it():
     entity = extract_entities("contact praha radar one two seven decimal "
                               "eight two five")[0]
