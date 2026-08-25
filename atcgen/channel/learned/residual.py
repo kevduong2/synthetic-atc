@@ -134,8 +134,8 @@ class ResidualGenerator(nn.Module):
         self.blocks = nn.ModuleList(blocks)
 
     def forward(self, x: torch.Tensor,
-                features: Sequence[int] | None = None
-                ) -> torch.Tensor | list[torch.Tensor]:
+                features: Sequence[int] | None = None,
+                alpha: float = 1.0) -> torch.Tensor | list[torch.Tensor]:
         if features is not None:
             wanted = sorted(features)
             deepest = wanted[-1]
@@ -151,11 +151,17 @@ class ResidualGenerator(nn.Module):
         h = x
         for block in self.blocks:
             h = block(h)
-        return self.apply_residual(x, h)
+        return self.apply_residual(x, h, alpha)
 
-    def apply_residual(self, x: torch.Tensor, raw: torch.Tensor) -> torch.Tensor:
-        """`x` plus the squashed residual, floored at 0 (log1p magnitudes are >= 0)."""
-        return (x + self.residual_scale_max * torch.tanh(raw)).clamp(min=0.0)
+    def apply_residual(self, x: torch.Tensor, raw: torch.Tensor,
+                       alpha: float = 1.0) -> torch.Tensor:
+        """`x` plus the squashed residual, floored at 0 (log1p magnitudes are >= 0).
+
+        `alpha` scales the bounded residual toward the calibrated-DSP endpoint:
+        1 is the trained bound, 0 would be a pure pass-through (callers bypass
+        the model entirely for that — see `ResidualTranslator.__call__`).
+        """
+        return (x + alpha * self.residual_scale_max * torch.tanh(raw)).clamp(min=0.0)
 
 
 def save_generator(path: str | Path, model: ResidualGenerator,
@@ -214,25 +220,38 @@ class ResidualTranslator:
     """
 
     def __init__(self, model: ResidualGenerator, device: torch.device | str = "cpu",
-                 target_sr: int = TARGET_SR):
+                 target_sr: int = TARGET_SR, checkpoint_sha256: str | None = None,
+                 training_step: int | None = None, crop_frames: int = 128):
         self.model = model
         self.device = torch.device(device)
         self.target_sr = target_sr
+        # checkpoint identity, stamped into every manifest row the backend
+        # writes -- a residual row that cannot name its exact weights cannot
+        # be audited against the promotion report later
+        self.checkpoint_sha256 = checkpoint_sha256
+        self.training_step = training_step
+        self.crop_frames = int(crop_frames)
 
     @classmethod
     def load(cls, checkpoint: str | Path, device: str | None = None,
              residual_scale_max: float | None = None,
              target_sr: int = TARGET_SR) -> "ResidualTranslator":
+        import hashlib
+
         dev = pick_device(device)
-        model, _ = load_generator(checkpoint, dev, residual_scale_max)
-        return cls(model, dev, target_sr)
+        model, payload = load_generator(checkpoint, dev, residual_scale_max)
+        digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
+        step = payload.get("step")
+        return cls(model, dev, target_sr, checkpoint_sha256=digest,
+                   training_step=int(step) if step is not None else None,
+                   crop_frames=int(payload.get("crop_frames", 128)))
 
     @property
     def residual_scale_max(self) -> float:
         return self.model.residual_scale_max
 
     @torch.no_grad()
-    def translate_spec(self, spec: torch.Tensor) -> torch.Tensor:
+    def translate_spec(self, spec: torch.Tensor, alpha: float = 1.0) -> torch.Tensor:
         """(1, 256, frames) log-magnitudes in, the same shape out.
 
         Frames are padded up to a multiple of the generator's downsampling and
@@ -242,21 +261,80 @@ class ResidualTranslator:
         pad = (-frames) % DOWNSAMPLE
         if pad:
             spec = F.pad(spec, (0, pad))
-        out = self.model(spec.unsqueeze(0).to(self.device)).squeeze(0)
+        out = self.model(spec.unsqueeze(0).to(self.device), alpha=alpha).squeeze(0)
         return out[..., :frames]
 
     @torch.no_grad()
+    def translate_spec_windowed(self, spec: torch.Tensor, alpha: float = 1.0,
+                                window: int | None = None) -> torch.Tensor:
+        """Translate crop-sized windows and crossfade their magnitudes.
+
+        Training uses fixed InstanceNorm'd crops.  Running the generator on a
+        much longer utterance changes those normalization statistics with clip
+        length, so long inference uses the checkpoint's training crop (128 for
+        older payloads) with 50% overlap.  Crossfading happens in linear
+        magnitude, not in the normalized log domain.
+        """
+        frames = spec.shape[-1]
+        width = int(window or self.crop_frames)
+        if width <= 0:
+            raise ValueError("window must be positive")
+        if alpha <= 0.0:
+            return spec
+        if frames <= width:
+            return self.translate_spec(spec, alpha)
+        hop = max(1, width // 2)
+        starts = list(range(0, frames - width + 1, hop))
+        if starts[-1] != frames - width:
+            starts.append(frames - width)
+
+        magnitude = torch.zeros_like(spec, device=self.device)
+        weights = torch.zeros((1, 1, frames), dtype=spec.dtype, device=self.device)
+        for index, start in enumerate(starts):
+            stop = min(start + width, frames)
+            translated = self.translate_spec(spec[..., start:stop], alpha)
+            mag = torch.expm1((translated * SPEC_SCALE).clamp(min=0, max=12))
+            weight = torch.ones((1, 1, stop - start), dtype=spec.dtype,
+                                device=self.device)
+            if index:
+                overlap = max(0, starts[index - 1] + width - start)
+                if overlap:
+                    weight[..., :overlap] = torch.linspace(
+                        0.0, 1.0, overlap + 2, device=self.device,
+                        dtype=spec.dtype)[1:-1]
+            if index + 1 < len(starts):
+                overlap = max(0, stop - starts[index + 1])
+                if overlap:
+                    weight[..., -overlap:] = torch.minimum(
+                        weight[..., -overlap:],
+                        torch.linspace(1.0, 0.0, overlap + 2,
+                                       device=self.device,
+                                       dtype=spec.dtype)[1:-1])
+            magnitude[..., start:stop] += mag * weight
+            weights[..., start:stop] += weight
+        return torch.log1p(magnitude / weights.clamp_min(1e-12)) / SPEC_SCALE
+
+    @torch.no_grad()
     def __call__(self, wav: np.ndarray, sr: int | None = None,
-                 rng: Any = None) -> np.ndarray:
-        """Wav in (float32 mono), the translated wav out at the same length."""
+                 rng: Any = None, alpha: float = 1.0) -> np.ndarray:
+        """Wav in (float32 mono), the translated wav out at the same length.
+
+        `alpha` scales the bounded residual (§4.2 of the FastCUT plan): 1 is
+        the trained bound, and `alpha <= 0` is an explicit translator bypass
+        returning the input untouched -- the calibrated-DSP endpoint of the
+        continuum, not a lossy STFT round trip of it.
+        """
         x = np.asarray(wav, dtype=np.float32).reshape(-1)
-        if len(x) < N_FFT:
-            return x
         if sr is not None and sr != self.target_sr:
             x = resample(x, sr, self.target_sr)
+        if alpha <= 0.0 or len(x) < N_FFT:
+            return x
         t = torch.from_numpy(x).to(self.device)
         spec, phase = wav_to_spec(t)
-        out = spec_to_wav(self.translate_spec(spec), phase, length=len(x))
+        translated = (self.translate_spec_windowed(spec, alpha)
+                      if spec.shape[-1] > 1.5 * self.crop_frames
+                      else self.translate_spec(spec, alpha))
+        out = spec_to_wav(translated, phase, length=len(x))
         y = out.detach().cpu().numpy().astype(np.float32)
         peak = float(np.abs(y).max())
         if peak > 1.0:
@@ -265,13 +343,20 @@ class ResidualTranslator:
 
 
 def load_translator(checkpoint: str | Path, residual_scale_max: float | None = None,
-                    device: str | None = None) -> ResidualTranslator | None:
-    """`ResidualTranslator.load`, or None when the checkpoint is not there yet.
+                    device: str | None = None, strict: bool = False
+                    ) -> ResidualTranslator | None:
+    """`ResidualTranslator.load`; a missing checkpoint is None, or an error.
 
-    `residual.enabled` is a config statement of intent; a missing checkpoint is
-    the normal state before M2.4 has been trained, and generation falls back to
-    the pure-DSP path rather than failing.
+    `strict=True` is the experimental posture (FastCUT plan §6.1): a run that
+    *says* it applies the residual must fail rather than silently generate
+    DSP-only audio.  `strict=False` remains for callers that probe for an
+    optional checkpoint without asserting one exists.
     """
     if not Path(checkpoint).exists():
+        if strict:
+            raise FileNotFoundError(
+                f"residual.enabled but no checkpoint at {checkpoint}; "
+                "train one or disable the residual -- a silent DSP fallback "
+                "would mislabel every generated row")
         return None
     return ResidualTranslator.load(checkpoint, device, residual_scale_max)

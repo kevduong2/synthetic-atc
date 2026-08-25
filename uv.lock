@@ -244,6 +244,11 @@ eval = [
     { name = "matplotlib" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "mlbucket" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = ">=0.33" },
@@ -264,6 +269,9 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.44" },
 ]
 provides-extras = ["dev", "eval"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "mlbucket", editable = "../MLBucket/sdk" }]
 
 [[package]]
 name = "attrs"
@@ -1756,6 +1764,20 @@ en = [
     { name = "spacy" },
     { name = "spacy-curated-transformers" },
 ]
+
+[[package]]
+name = "mlbucket"
+source = { editable = "../MLBucket/sdk" }
+
+[package.metadata]
+requires-dist = [
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=5.1" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16" },
+]
+provides-extras = ["dev", "yaml"]
 
 [[package]]
 name = "mpmath"

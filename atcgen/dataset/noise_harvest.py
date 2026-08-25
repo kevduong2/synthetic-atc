@@ -23,7 +23,8 @@ def _manifest_sources(manifest: Path):
             path = Path(record["path"])
             if not path.is_absolute():
                 path = manifest.parent / path
-            yield record.get("clip_id", path.stem), record.get("station", "unknown"), path
+            yield (record.get("clip_id", path.stem),
+                   record.get("station", "unknown"), path, record.get("split"))
 
 
 def _sources(source: Path):
@@ -35,7 +36,7 @@ def _sources(source: Path):
         yield from _manifest_sources(manifest)
         return
     for path in sorted(p for p in source.rglob("*") if p.is_file() and p.suffix.lower() == ".wav"):
-        yield path.stem, parse_station(path), path
+        yield path.stem, parse_station(path), path, None
 
 
 def _non_speech_segments(wav: np.ndarray, min_samples: int) -> list[tuple[int, int]]:
@@ -90,6 +91,7 @@ def harvest(
     corpus_manifest_or_dir: str | Path,
     out_dir: str | Path,
     min_ms: int = 200,
+    split: str | None = None,
 ) -> Path:
     """Write VAD-selected noise WAVs and return ``noise_stats.jsonl``."""
     if min_ms <= 0:
@@ -97,6 +99,9 @@ def harvest(
     source = Path(corpus_manifest_or_dir)
     if not source.exists():
         raise ValueError(f"source does not exist: {source}")
+    manifest_source = source.is_file() or (source / "corpus.jsonl").exists()
+    if split is not None and not manifest_source:
+        raise ValueError("split filtering requires a corpus manifest")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     for old_segment in out.glob("[0-9][0-9][0-9][0-9].wav"):
@@ -104,7 +109,9 @@ def harvest(
     min_samples = int(TARGET_SR * min_ms / 1000)
 
     records: list[dict] = []
-    for clip_id, station, path in _sources(source):
+    for clip_id, station, path, source_split in _sources(source):
+        if split is not None and source_split != split:
+            continue
         try:
             wav, sr = sf.read(path, dtype="float32", always_2d=True)
         except (OSError, RuntimeError, ValueError, sf.LibsndfileError):
@@ -118,6 +125,7 @@ def harvest(
             records.append({
                 "source_clip": clip_id,
                 "station": station,
+                "split": source_split,
                 "duration": round(len(segment) / TARGET_SR, 6),
                 "rms_db": round(rms_db, 3),
                 "ltas_centroid_hz": round(_ltas_centroid(segment), 3),
@@ -136,8 +144,10 @@ def main() -> None:
     parser.add_argument("corpus_manifest_or_dir", type=Path)
     parser.add_argument("out_dir", type=Path)
     parser.add_argument("--min-ms", type=int, default=200)
+    parser.add_argument("--split", default=None)
     args = parser.parse_args()
-    stats_path = harvest(args.corpus_manifest_or_dir, args.out_dir, args.min_ms)
+    stats_path = harvest(
+        args.corpus_manifest_or_dir, args.out_dir, args.min_ms, args.split)
     records = [json.loads(line) for line in stats_path.read_text().splitlines() if line]
     gated = sum(record["squelch_gated"] for record in records)
     print(json.dumps({

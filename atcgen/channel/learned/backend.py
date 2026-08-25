@@ -18,15 +18,15 @@ clips.  Mixing a Center receiver's hiss into a Tower's channel is possible but
 rare (`cross_station_prob`), because the combination is not one any real
 receiver produces.
 
-The residual CUT translator (M2.4, `residual.py`) is the optional third stage:
-it sits between the fitted chain and the post-effects, at probability
-`residual.apply_prob`, and models what the fit misses.  It is off unless the
-config enables it *and* a trained checkpoint exists, so this module — and
-generation generally — never imports torch on the default path.
+The residual CUT translator (M2.4, `residual.py`) is the optional final learned
+stage: it receives the fitted chain plus post-effects at probability
+`residual.apply_prob`, and models what that full rendering still misses.  It is
+off unless the config enables it, so this module — and generation generally —
+never imports torch on the default path.  Enabling it requires a checkpoint;
+missing weights fail closed rather than silently producing mislabeled DSP rows.
 """
 
 import random
-import warnings
 from collections import Counter, defaultdict
 from json import loads
 from pathlib import Path
@@ -63,20 +63,14 @@ def _load_residual(config: ResidualConfig) -> Callable[..., np.ndarray] | None:
     """The trained translator named by `residual:`, or None.
 
     Imported here rather than at module scope because `residual.py` pulls in
-    torch and nothing else in Mode 2 generation needs it.  `enabled: true` with
-    no checkpoint on disk is the normal state before M2.4 has been trained on
-    the 5080, so it warns and falls back to the pure-DSP path instead of
-    failing a generation run that is otherwise fine.
+    torch and nothing else in Mode 2 generation needs it.  An enabled residual
+    is an assertion that its configured weights exist, so loading is strict.
     """
     if not config.enabled:
         return None
     from .residual import load_translator
 
-    translator = load_translator(config.checkpoint, config.residual_scale_max)
-    if translator is None:
-        warnings.warn(f"residual.enabled but no checkpoint at {config.checkpoint};"
-                      " generating with the fitted DSP chain only", stacklevel=2)
-    return translator
+    return load_translator(config.checkpoint, config.residual_scale_max, strict=True)
 
 
 class StationNoise:
@@ -147,7 +141,8 @@ class CalibratedChannel:
                  post_effects: PostEffectsConfig | None = None,
                  target_sr: int = TARGET_SR,
                  residual: Callable[..., np.ndarray] | None = None,
-                 residual_prob: float = 0.0):
+                 residual_prob: float = 0.0,
+                 residual_alpha: DistSpec | None = None):
         if not presets:
             raise ValueError("CalibratedChannel needs at least one preset")
         self.presets = list(presets)
@@ -158,6 +153,7 @@ class CalibratedChannel:
         self.target_sr = target_sr
         self.residual = residual
         self.residual_prob = float(residual_prob)
+        self.residual_alpha = residual_alpha
 
         self.by_station: dict[str, list[Preset]] = defaultdict(list)
         for preset in self.presets:
@@ -195,6 +191,7 @@ class CalibratedChannel:
             target_sr=target_sr,
             residual=_load_residual(config.residual),
             residual_prob=config.residual.apply_prob,
+            residual_alpha=config.residual.alpha,
         )
 
     # -- sampling ----------------------------------------------------------- #
@@ -287,8 +284,8 @@ class CalibratedChannel:
                                               max(hops, 1) - 1))
         record.snr_db = round(float(snr), 2)
 
-        x = self._residual(x, rng, record)
         x = self._post_effects(x, rng, record, pad, preset, interference)
+        x = self._residual(x, rng, record, meta)
         peak = float(np.abs(x).max())
         if peak > 1.0:
             x = x / peak * 0.98
@@ -322,14 +319,15 @@ class CalibratedChannel:
                                 mode="same")).astype(np.float32)
 
     def _residual(self, x: np.ndarray, rng: random.Random,
-                  record: ChannelRecord) -> np.ndarray:
-        """The learned residual, on a coin flip, between the fit and the events.
+                  record: ChannelRecord, meta: UtteranceMeta | None) -> np.ndarray:
+        """Apply the learned residual after the fitted chain and post-effects.
 
-        Order is the physical one, and it is also the one training assumed:
-        domain A was the fitted chain's output with post-effects off, so this is
-        the only place the translator has ever seen its input.  Applying it
-        after a squelch gate or an MP3 round-trip would hand it a distribution
-        it was never trained on.
+        Real Domain B unavoidably contains squelch, dropout, and codec events.
+        Training now renders Domain A with those post-effects on, so A and B
+        differ only by the gap the residual should learn.  Inference therefore
+        hands the translator that same post-effected distribution.  Applying it
+        earlier would train it on audio inference never supplies and could make
+        it fabricate events that production then stamps on a second time.
 
         `apply_prob` below 1 is deliberate (04 §2.4): the pure-DSP path stays
         represented in every generated corpus, so a translator that turns out to
@@ -340,12 +338,23 @@ class CalibratedChannel:
         `record.applied()` stays a list of things that actually happened).
         """
         record.residual_applied = False
-        if self.residual is None or rng.random() >= self.residual_prob:
+        if (meta is not None and meta.kind == "noise") or self.residual is None:
             return x
-        y = np.asarray(self.residual(x, self.target_sr, rng), dtype=np.float32)
+        if rng.random() >= self.residual_prob:
+            return x
+        alpha = (float(self.residual_alpha.sample(rng))
+                 if self.residual_alpha is not None else 1.0)
+        if alpha <= 0.0:
+            record.residual_alpha = 0.0
+            return x
+        y = np.asarray(
+            self.residual(x, self.target_sr, rng, alpha=alpha), dtype=np.float32)
         record.residual_applied = True
+        record.residual_alpha = alpha
         record.steps.append({"primitive": "residual_translate", "hop": 0,
-                             "residual_applied": True})
+                             "alpha": round(alpha, 3),
+                             "checkpoint_sha256": self.residual.checkpoint_sha256,
+                             "checkpoint_step": self.residual.training_step})
         return y
 
     def _dropouts(self, x: np.ndarray, rng: random.Random,

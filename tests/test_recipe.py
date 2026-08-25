@@ -7,15 +7,25 @@ checkpoint, and that `run.json` records the budget.
 """
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 
+from atcgen.rl.finetune_lite import finetune
+from scripts import bench_devices
 from training import recipe as recipe_mod
 from training.grpo import Utterance, UtterancePool
 from training.recipe import LazyFeatures, RecipeConfig, mixed_pool, run_recipe
 
 SR = 16000
+
+
+@pytest.fixture(autouse=True)
+def tracking_off(monkeypatch):
+    monkeypatch.setenv("ATCGAN_TRACKING", "off")
 
 
 class _StubPool:
@@ -74,9 +84,13 @@ def test_mixture_degenerates_to_a_single_source():
 # -- lazy features ---------------------------------------------------------
 
 def test_lazy_features_match_the_finetune_contract():
-    from transformers import WhisperProcessor
+    class Processor:
+        tokenizer = lambda self, text: SimpleNamespace(input_ids=[1, 2, 3])
 
-    processor = WhisperProcessor.from_pretrained("openai/whisper-tiny.en")
+        def __call__(self, audio, sampling_rate):
+            return SimpleNamespace(input_features=np.zeros((1, 80, 3000), np.float32))
+
+    processor = Processor()
     features = LazyFeatures(_StubPool(["radar contact", ""]), processor)
     assert len(features) == 2
     row = features[np.int64(0)]  # finetune indexes with numpy ints
@@ -91,6 +105,35 @@ def stubbed(monkeypatch):
     """Replace the heavy stages; record what the recipe handed them."""
     calls = {}
 
+    class FakeProcessor:
+        tokenizer = lambda self, text: SimpleNamespace(input_ids=[1, 2, 3])
+
+        @classmethod
+        def from_pretrained(cls, model):
+            return cls()
+
+        def __call__(self, audio, sampling_rate, **kwargs):
+            return SimpleNamespace(input_features=np.zeros((1, 80, 8), np.float32))
+
+        def save_pretrained(self, directory):
+            Path(directory).mkdir(parents=True, exist_ok=True)
+            (Path(directory) / "preprocessor_config.json").write_text("{}")
+
+    class FakeModel:
+        def __init__(self):
+            self.config = SimpleNamespace(use_cache=True)
+
+        @classmethod
+        def from_pretrained(cls, model):
+            return cls()
+
+        def to(self, device):
+            return self
+
+        def save_pretrained(self, directory):
+            Path(directory).mkdir(parents=True, exist_ok=True)
+            (Path(directory) / "config.json").write_text("{}")
+
     def fake_load_pool(spec):
         if spec.manifests:
             return UtterancePool([_fake_dataset([f"s{i}" for i in range(12)])])
@@ -98,6 +141,10 @@ def stubbed(monkeypatch):
 
     def fake_finetune(model, features, **kwargs):
         calls["sft"] = {"n_features": len(features), **kwargs}
+        callback = kwargs.get("on_step")
+        if callback:
+            for step in range(1, kwargs["steps"] + 1):
+                callback(step, 4.0 / step)
         model._ft_losses = [3.0, 2.5, 2.0]
         return model
 
@@ -112,6 +159,8 @@ def stubbed(monkeypatch):
         return {"wer": 0.5, "hallucination_rate": 0.0, "samples": len(pool)}
 
     monkeypatch.setattr(recipe_mod, "load_pool", fake_load_pool)
+    monkeypatch.setattr(recipe_mod, "WhisperProcessor", FakeProcessor)
+    monkeypatch.setattr(recipe_mod, "WhisperForConditionalGeneration", FakeModel)
     monkeypatch.setattr(recipe_mod, "finetune", fake_finetune)
     monkeypatch.setattr(recipe_mod, "run_grpo", fake_run_grpo)
     monkeypatch.setattr(recipe_mod, "evaluate_dev", fake_evaluate_dev)
@@ -159,3 +208,72 @@ def test_mix_grpo_chains_the_sft_checkpoint_into_grpo(tmp_path, stubbed):
 def test_unknown_arm_is_rejected(tmp_path, stubbed):
     with pytest.raises(ValueError, match="unknown arm"):
         run_recipe(_config(tmp_path, "nonsense"))
+
+
+def test_finetune_on_step_fires_after_every_optimizer_step():
+    class TinyModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor(0.5))
+            self.config = SimpleNamespace(decoder_start_token_id=None, use_cache=True)
+
+        def forward(self, input_features, labels):
+            target = input_features.mean()
+            return SimpleNamespace(loss=(self.weight - target).square())
+
+    features = [
+        {"input_features": np.full((2, 3), value, np.float32), "labels": [1, 2]}
+        for value in (0.1, 0.2)
+    ]
+    seen = []
+    finetune(TinyModel(), features, steps=3, batch_size=1, lr=1e-3,
+             seed=2, device="cpu", on_step=lambda step, loss: seen.append((step, loss)))
+    assert [step for step, _ in seen] == [1, 2, 3]
+    assert all(isinstance(loss, float) for _, loss in seen)
+
+
+def test_recipe_live_tracking_is_best_effort_and_finishes(tmp_path, stubbed, monkeypatch):
+    class RecordingRun:
+        def __init__(self):
+            self.logs = []
+            self.finished = False
+
+        def log(self, values, step=None):
+            self.logs.append((values, step))
+
+        def finish(self):
+            self.finished = True
+
+    recorded = RecordingRun()
+    started = {}
+
+    def fake_start_run(**kwargs):
+        started.update(kwargs)
+        return recorded
+
+    monkeypatch.setattr(recipe_mod, "start_run", fake_start_run)
+    cfg = _config(tmp_path, "mix")
+    cfg.sft_steps = 10
+    run = run_recipe(cfg)
+    keys = {key for values, _ in recorded.logs for key in values}
+    assert started["project"] == "atcgan-fastcut"
+    assert started["tags"] == ("asr", "mix")
+    assert {"sft/loss", "sft/wall_seconds", "sft/pool_size",
+            "dev/wer", "dev/hallucination_rate", "dev/samples"} <= keys
+    assert recorded.finished is True
+    assert json.loads((Path(cfg.out) / "run.json").read_text()) == run
+
+
+def test_device_benchmark_quick_gan_cpu_smoke(tmp_path):
+    out = tmp_path / "bench.json"
+    result = bench_devices.main([
+        "--gan", "--quick", "--device", "cpu", "--out", str(out),
+        "--gan-warmup", "1", "--gan-steps", "1",
+        "--gan-r1-warmup", "1", "--gan-r1-steps", "1",
+        "--gan-batch", "1", "--gan-crop", "32", "--gan-base", "2",
+        "--gan-n-res", "1", "--gan-scales", "1",
+    ])
+    saved = json.loads(out.read_text())
+    assert result["results"]["gan"]["status"] == "ok"
+    assert saved["results"]["gan"]["ordinary"]["repeats"] == 3
+    assert saved["results"]["gan"]["r1"]["seconds"]["min"] >= 0.0

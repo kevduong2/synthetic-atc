@@ -238,9 +238,10 @@ class CalibrationConfig:
 
 @dataclass
 class ResidualConfig:
-    enabled: bool = True
+    enabled: bool = False
     checkpoint: str = "runs/cut_v1/G_ema.pt"
     apply_prob: float = 0.5
+    alpha: DistSpec = field(default_factory=lambda: DistSpec.parse(1.0))
     residual_scale_max: float = 0.35
 
 
@@ -481,7 +482,7 @@ def _parse_calibration(value: Any, path: str) -> CalibrationConfig:
 
 def _parse_residual(value: Any, path: str) -> ResidualConfig:
     data = _mapping(value, path)
-    names = {"enabled", "checkpoint", "apply_prob", "residual_scale_max"}
+    names = {"enabled", "checkpoint", "apply_prob", "alpha", "residual_scale_max"}
     _reject_unknown(data, names, path)
     default = ResidualConfig()
     enabled = data.get("enabled", default.enabled)
@@ -494,9 +495,15 @@ def _parse_residual(value: Any, path: str) -> ResidualConfig:
                     f"{path}.residual_scale_max")
     if scale < 0:
         raise ValueError(f"{path}.residual_scale_max must be non-negative")
-    return ResidualConfig(enabled, checkpoint,
-                          _probability(data.get("apply_prob", default.apply_prob),
-                                       f"{path}.apply_prob"), scale)
+    return ResidualConfig(
+        enabled=enabled,
+        checkpoint=checkpoint,
+        apply_prob=_probability(data.get("apply_prob", default.apply_prob),
+                                f"{path}.apply_prob"),
+        alpha=DistSpec.parse(data.get("alpha", default.alpha.as_dict()),
+                             f"{path}.alpha"),
+        residual_scale_max=scale,
+    )
 
 
 def _effect(value: Any, path: str, cls: type, names: set[str]) -> Any:

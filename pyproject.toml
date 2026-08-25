@@ -36,3 +36,11 @@ packages = ["atcgen"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+mlbucket = { path = "../MLBucket/sdk", editable = true }
+
+[dependency-groups]
+dev = [
+    "mlbucket",
+]

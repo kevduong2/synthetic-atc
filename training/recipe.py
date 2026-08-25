@@ -46,6 +46,7 @@ from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from atcgen.rl.finetune_lite import finetune                       # noqa: E402
+from atcgen.tracking import start_run                              # noqa: E402
 from training.evaluate import pick_device                          # noqa: E402
 from training.grpo import (                                        # noqa: E402
     SR, DataSpec, GRPOConfig, RewardWeights, UtterancePool, concat_pools,
@@ -181,8 +182,28 @@ def build_sft_pool(cfg: RecipeConfig) -> UtterancePool:
     raise ValueError(f"unknown arm {cfg.arm!r}; expected one of {ARMS}")
 
 
+def _tracking_log(run, values: dict, step: int | None = None) -> None:
+    """Best-effort log: tracking is observability, never training control flow."""
+    try:
+        run.log(values, step=step)
+    except Exception:
+        pass
+
+
 def run_recipe(cfg: RecipeConfig) -> dict:
     """Run the arm end to end. Returns the run summary (also at out/run.json)."""
+    tracking_run = start_run(project="atcgan-fastcut", name=Path(cfg.out).name,
+                             config=cfg.json(), tags=("asr", cfg.arm))
+    try:
+        return _run_recipe(cfg, tracking_run)
+    finally:
+        try:
+            tracking_run.finish()
+        except Exception:
+            pass
+
+
+def _run_recipe(cfg: RecipeConfig, tracking_run) -> dict:
     out = Path(cfg.out)
     out.mkdir(parents=True, exist_ok=True)
     device = pick_device(cfg.device)
@@ -199,9 +220,16 @@ def run_recipe(cfg: RecipeConfig) -> dict:
     model.to(device)
 
     started = time.monotonic()
+    def on_sft_step(step: int, loss: float) -> None:
+        if step % 10 == 0:
+            _tracking_log(tracking_run, {"sft/loss": loss}, step=step)
+
     finetune(model, LazyFeatures(pool, processor), steps=cfg.sft_steps,
-             batch_size=cfg.sft_batch, lr=cfg.sft_lr, seed=cfg.seed, device=device)
+             batch_size=cfg.sft_batch, lr=cfg.sft_lr, seed=cfg.seed, device=device,
+             on_step=on_sft_step)
     sft_seconds = time.monotonic() - started
+    _tracking_log(tracking_run, {"sft/wall_seconds": sft_seconds,
+                                 "sft/pool_size": len(pool)}, step=cfg.sft_steps)
 
     sft_dir = out / "sft"
     sft_dir.mkdir(parents=True, exist_ok=True)
@@ -223,8 +251,10 @@ def run_recipe(cfg: RecipeConfig) -> dict:
     }]
 
     if dev_pool is not None:
-        stages[-1]["dev"] = evaluate_dev(model, processor, dev_pool, device,
-                                         cfg.dev_batch, 100)
+        dev = evaluate_dev(model, processor, dev_pool, device, cfg.dev_batch, 100)
+        stages[-1]["dev"] = dev
+        _tracking_log(tracking_run, {f"dev/{key}": value
+                                     for key, value in dev.items()})
 
     del model
     if device.type == "mps":
@@ -247,6 +277,12 @@ def run_recipe(cfg: RecipeConfig) -> dict:
         )
         started = time.monotonic()
         summary = run_grpo(grpo_cfg, train_pool=pool, dev_pool=dev_pool)
+        _tracking_log(tracking_run, {
+            "grpo/best_dev_wer": summary["best"].get("dev_wer"),
+            "grpo/best_step": summary["best"].get("step"),
+            "grpo/wall_seconds": summary.get("wall_seconds"),
+            "grpo/pool_size": len(pool),
+        })
         stages.append({
             "name": "grpo",
             "checkpoint": summary["best"]["checkpoint"] or summary["last_checkpoint"],

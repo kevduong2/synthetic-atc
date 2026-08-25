@@ -15,9 +15,11 @@ import soundfile as sf
 from scipy import signal
 
 from atcgen.channel.learned.backend import (COCHANNEL_PROB, PTT_PROB,
-                                            CalibratedChannel, StationNoise)
+                                            CalibratedChannel, StationNoise,
+                                            _load_residual)
 from atcgen.channel.learned.preset import BAND_EDGES, Preset, band_centers, write_presets
-from atcgen.config import DistSpec, PostEffectsConfig, load_config
+from atcgen.channel.chain import UtteranceMeta
+from atcgen.config import DistSpec, PostEffectsConfig, ResidualConfig, load_config
 from atcgen.dataset.build import build_dataset, make_backend
 
 SR = 16000
@@ -88,6 +90,18 @@ def _no_post() -> PostEffectsConfig:
     effects = PostEffectsConfig()
     effects.codec.prob = effects.squelch.prob = effects.dropouts.prob = 0.0
     return effects
+
+
+class _StubResidual:
+    checkpoint_sha256 = "stub-checkpoint-sha256"
+    training_step = 41
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, wav, sr=None, rng=None, alpha=1.0):
+        self.calls.append((np.asarray(wav).copy(), sr, alpha))
+        return np.asarray(wav, dtype=np.float32)
 
 
 # --------------------------------------------------------------------------- #
@@ -286,6 +300,111 @@ def test_runs_without_a_noise_bank(calibration):
 def test_empty_preset_pool_is_rejected():
     with pytest.raises(ValueError, match="at least one preset"):
         CalibratedChannel([], None)
+
+
+# --------------------------------------------------------------------------- #
+# the learned residual
+# --------------------------------------------------------------------------- #
+
+def test_enabled_residual_missing_checkpoint_fails_closed(tmp_path):
+    config = ResidualConfig(enabled=True, checkpoint=str(tmp_path / "missing.pt"))
+    with pytest.raises(FileNotFoundError, match="residual.enabled"):
+        _load_residual(config)
+
+
+def test_residual_runs_after_all_post_effects(calibration, monkeypatch):
+    effects = PostEffectsConfig()
+    effects.squelch.prob = effects.dropouts.prob = effects.codec.prob = 1.0
+    monkeypatch.setattr("atcgen.channel.learned.backend.codec_roundtrip",
+                        lambda wav, *args, **kwargs: wav)
+    residual = _StubResidual()
+    channel = _channel(calibration, post_effects=effects, residual=residual,
+                       residual_prob=1.0, residual_alpha=DistSpec.parse(1.0))
+
+    _, record = channel(_speech(), SR, random.Random(0))
+    steps = record.applied()
+
+    assert {"dropouts", "squelch_gate", "squelch_clicks",
+            "codec_roundtrip"} <= set(steps)
+    assert steps[-1] == "residual_translate"
+    assert steps.index("residual_translate") > steps.index("codec_roundtrip")
+    assert len(residual.calls) == 1
+
+
+def test_noise_only_rows_skip_the_residual(calibration):
+    residual = _StubResidual()
+    channel = _channel(calibration, post_effects=_no_post(), residual=residual,
+                       residual_prob=1.0, residual_alpha=DistSpec.parse(1.0))
+
+    _, record = channel(_speech(), SR, random.Random(0),
+                        meta=UtteranceMeta(kind="noise"))
+
+    assert residual.calls == []
+    assert record.residual_applied is False
+    assert record.residual_alpha is None
+    assert "residual_translate" not in record.applied()
+
+
+def test_alpha_zero_is_an_exact_dsp_bypass(calibration):
+    class MustNotRun(_StubResidual):
+        def __call__(self, *args, **kwargs):
+            raise AssertionError("alpha=0 must bypass the translator")
+
+    with_residual = _channel(
+        calibration, post_effects=_no_post(), residual=MustNotRun(),
+        residual_prob=1.0, residual_alpha=DistSpec.parse(0.0))
+    dsp_only = _channel(calibration, post_effects=_no_post())
+
+    actual, record = with_residual(_speech(), SR, random.Random(7))
+    expected, _ = dsp_only(_speech(), SR, random.Random(7))
+
+    assert np.array_equal(actual, expected)
+    assert record.residual_applied is False
+    assert record.residual_alpha == 0.0
+    assert record.as_dict()["residual_alpha"] == 0.0
+    assert "residual_translate" not in record.applied()
+
+
+def test_drawn_alpha_is_passed_and_recorded(calibration):
+    residual = _StubResidual()
+    channel = _channel(
+        calibration, post_effects=_no_post(), residual=residual,
+        residual_prob=1.0,
+        residual_alpha=DistSpec.parse({"uniform": [0.375, 0.375]}))
+
+    _, record = channel(_speech(), SR, random.Random(2))
+    step = next(item for item in record.steps
+                if item["primitive"] == "residual_translate")
+
+    assert residual.calls[0][2] == pytest.approx(0.375)
+    assert record.residual_applied is True
+    assert record.residual_alpha == pytest.approx(0.375)
+    assert step["alpha"] == pytest.approx(0.375)
+
+
+def test_real_checkpoint_identity_is_stamped_on_the_step(tmp_path, calibration):
+    import hashlib
+
+    from atcgen.channel.learned.residual import ResidualGenerator, save_generator
+
+    checkpoint = save_generator(
+        tmp_path / "tiny.pt",
+        ResidualGenerator(base=2, n_res=0, residual_scale_max=0.1),
+        {"step": 23},
+    )
+    translator = _load_residual(ResidualConfig(
+        enabled=True, checkpoint=str(checkpoint), apply_prob=1.0,
+        alpha=DistSpec.parse(0.5), residual_scale_max=0.1))
+    channel = _channel(
+        calibration, post_effects=_no_post(), residual=translator,
+        residual_prob=1.0, residual_alpha=DistSpec.parse(0.5))
+
+    _, record = channel(_speech(0.3), SR, random.Random(3))
+    step = next(item for item in record.steps
+                if item["primitive"] == "residual_translate")
+
+    assert step["checkpoint_sha256"] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    assert step["checkpoint_step"] == 23
 
 
 # --------------------------------------------------------------------------- #

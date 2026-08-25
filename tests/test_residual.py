@@ -10,8 +10,11 @@ gates are judged there.
 """
 
 import json
+import os
 import random
 import warnings
+
+os.environ.setdefault("ATCGAN_TRACKING", "off")
 
 import numpy as np
 import pytest
@@ -78,7 +81,7 @@ def corpus(tmp_path):
         sf.write(clips / f"{name}.wav", _radioish(1.5, index), SR)
         rows.append({"clip_id": name, "path": f"clips/{name}.wav",
                      "station": "ALPHA_TOWER", "duration": 1.5,
-                     "split": "train" if index < 5 else "holdout"})
+                     "split": "channel_train" if index < 5 else "channel_val"})
     corpus_path = tmp_path / "corpus.jsonl"
     corpus_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
 
@@ -231,8 +234,8 @@ def test_ema_lags_behind_the_live_weights():
 # --- data --------------------------------------------------------------------
 
 def test_corpus_clips_honours_the_split(corpus):
-    assert len(corpus_clips(corpus["corpus"], "train")) == 5
-    assert len(corpus_clips(corpus["corpus"], "holdout")) == 1
+    assert len(corpus_clips(corpus["corpus"], "channel_train")) == 5
+    assert len(corpus_clips(corpus["corpus"], "channel_val")) == 1
     with pytest.raises(ValueError):
         corpus_clips(corpus["corpus"], "nonesuch")
 
@@ -265,7 +268,8 @@ def smoke(tmp_path_factory):
         name = f"ALPHA_TOWER_{index:03d}"
         sf.write(clips / f"{name}.wav", _radioish(1.5, index), SR)
         rows.append({"clip_id": name, "path": f"clips/{name}.wav",
-                     "station": "ALPHA_TOWER", "duration": 1.5, "split": "train"})
+                     "station": "ALPHA_TOWER", "duration": 1.5,
+                     "split": "channel_train"})
     (root / "corpus.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in rows))
     write_presets(root / "presets.jsonl",
@@ -309,7 +313,8 @@ def test_smoke_run_writes_the_documented_artifacts(smoke):
 def test_smoke_checkpoint_reloads_and_ema_differs_from_raw(smoke):
     ema, payload = load_generator(smoke["out"] / "G_ema.pt")
     raw, _ = load_generator(smoke["out"] / "G_latest.pt")
-    assert payload["kid"] is None                          # KID off in the smoke
+    assert payload["selection"] is None                   # evaluation off in smoke
+    assert payload["crop_frames"] == 64
     ema_flat = torch.cat([p.flatten() for p in ema.parameters()])
     raw_flat = torch.cat([p.flatten() for p in raw.parameters()])
     assert torch.isfinite(ema_flat).all()
@@ -325,6 +330,25 @@ def test_translator_preserves_length_and_dtype(tmp_path):
     out = translator(wav, SR)
     assert out.shape == wav.shape and out.dtype == np.float32
     assert np.isfinite(out).all() and np.abs(out).max() <= 1.0
+
+
+def test_translator_windowed_spec_path_preserves_shape_and_finiteness(tmp_path):
+    save_generator(tmp_path / "G.pt", _toy_generator(), extra={"crop_frames": 32})
+    translator = ResidualTranslator.load(tmp_path / "G.pt", device="cpu")
+    spec = torch.rand(1, 256, 91) * 0.5
+    out = translator.translate_spec_windowed(spec)
+    assert translator.crop_frames == 32
+    assert out.shape == spec.shape
+    assert torch.isfinite(out).all()
+
+
+def test_windowed_alpha_zero_is_an_exact_bypass(tmp_path):
+    save_generator(tmp_path / "G.pt", _toy_generator(), extra={"crop_frames": 32})
+    translator = ResidualTranslator.load(tmp_path / "G.pt", device="cpu")
+    spec = torch.rand(1, 256, 91) * 0.5
+    assert torch.equal(translator.translate_spec_windowed(spec, alpha=0.0), spec)
+    wav = _radioish(2.0, 31)
+    assert np.array_equal(translator(wav, SR, alpha=0.0), wav)
 
 
 def test_translator_honours_the_residual_clamp(tmp_path):
@@ -379,7 +403,8 @@ def test_backend_applies_and_records_the_residual(corpus, tmp_path):
     assert record.residual_applied is True
     assert "residual_translate" in record.applied()
     step = next(s for s in record.steps if s["primitive"] == "residual_translate")
-    assert step["residual_applied"] is True
+    assert step["alpha"] == 1.0
+    assert "checkpoint_sha256" in step and "checkpoint_step" in step
 
 
 def test_backend_without_a_translator_records_nothing(corpus):
@@ -398,8 +423,8 @@ def test_apply_prob_zero_never_fires(corpus, tmp_path):
                    for i in range(5))
 
 
-def test_residual_runs_before_the_post_effects(corpus, tmp_path):
-    """Training only ever saw the fitted chain's output — order is the contract."""
+def test_residual_runs_after_the_post_effects(corpus, tmp_path):
+    """Training and inference both give the residual post-effected audio."""
     save_generator(tmp_path / "G.pt", _toy_generator())
     translator = ResidualTranslator.load(tmp_path / "G.pt", device="cpu")
     from atcgen.channel.learned.preset import load_presets
@@ -412,8 +437,8 @@ def test_residual_runs_before_the_post_effects(corpus, tmp_path):
         residual=translator, residual_prob=1.0)
     _, record = channel(_speechish(1.5, 13), SR, random.Random(0))
     order = record.applied()
-    assert order.index("residual_translate") < order.index("squelch_gate")
-    assert order.index("residual_translate") < order.index("dropouts")
+    assert order.index("residual_translate") > order.index("squelch_gate")
+    assert order.index("residual_translate") > order.index("dropouts")
 
 
 def _calibrated_config(corpus, checkpoint) -> CalibratedConfig:
@@ -436,13 +461,10 @@ def test_from_config_loads_an_enabled_checkpoint(corpus, tmp_path):
     assert record.residual_applied is True
 
 
-def test_from_config_warns_and_falls_back_when_untrained(corpus, tmp_path):
+def test_from_config_fails_closed_when_untrained(corpus, tmp_path):
     config = _calibrated_config(corpus, tmp_path / "nope.pt")
-    with pytest.warns(UserWarning, match="no checkpoint"):
-        channel = CalibratedChannel.from_config(config)
-    assert channel.residual is None
-    _, record = channel(_speechish(1.0, 15), SR, random.Random(0))
-    assert record.residual_applied is False
+    with pytest.raises(FileNotFoundError, match="no checkpoint"):
+        CalibratedChannel.from_config(config)
 
 
 def test_disabled_residual_never_imports_the_translator(corpus):

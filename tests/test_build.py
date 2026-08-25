@@ -162,7 +162,8 @@ def test_manifest_record_schema_and_gen_blob(tmp_path):
         assert gen["pitch"] is None or -2.0 <= gen["pitch"] <= 2.0
         assert gen["tempo"] is None or 0.9 <= gen["tempo"] <= 1.1
         assert gen["eq_tilt_db"] is None or -3.0 <= gen["eq_tilt_db"] <= 3.0
-        assert set(gen["channel"]) == {"hops", "clean_arm", "snr_db", "steps"}
+        assert set(gen["channel"]) == {"hops", "clean_arm", "snr_db",
+                                           "residual_alpha", "steps"}
         assert 8 <= gen["channel"]["snr_db"] <= 25
         assert gen["qc"] == {"ok": True, "reason": None, "attempts": 1}
         wav, sr = sf.read(tmp_path / "out" / record["audio"], dtype="float32")

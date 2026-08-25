@@ -36,6 +36,7 @@ enough for tests but leaves a systematic tilt in real fits.
 import argparse
 import json
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -506,12 +507,19 @@ def fit_corpus(corpus_manifest: str | Path, out_path: str | Path,
                probe_dir: str | Path | None = None, steps: int = DEFAULT_STEPS,
                n_probes: int = DEFAULT_PROBES, seed: int = 0, limit: int | None = None,
                device: str = "cpu", qc_k: float = QC_MAD_K,
-               progress: bool = False) -> dict:
+               progress: bool = False, split: str | None = None) -> dict:
     """Fit every clip in a corpus manifest, QC the results, write presets.jsonl."""
     corpus = Path(corpus_manifest)
-    rows = _corpus_rows(corpus)[:limit]
+    all_rows = _corpus_rows(corpus)
+    input_counts = Counter(
+        row.get("split") if row.get("split") is not None else "null"
+        for row in all_rows)
+    rows = [row for row in all_rows
+            if split is None or row.get("split") == split]
+    rows = rows[:limit]
     if not rows:
-        raise ValueError(f"no clips in {corpus}")
+        suffix = f" for split {split!r}" if split is not None else ""
+        raise ValueError(f"no clips in {corpus}{suffix}")
 
     presets: list[Preset] = []
     band_errors: list[np.ndarray] = []
@@ -550,7 +558,9 @@ def fit_corpus(corpus_manifest: str | Path, out_path: str | Path,
                        else np.zeros(1))
     summary.update({"presets": str(out_path), "steps": steps, "n_probes": n_probes,
                     "probe_dir": str(probe_dir) if probe_dir else None,
-                    "seconds": round(time.time() - started, 1)})
+                    "seconds": round(time.time() - started, 1),
+                    "split_filter": split,
+                    "input_counts": dict(sorted(input_counts.items()))})
     Path(out_path).with_name("presets_stats.json").write_text(
         json.dumps(summary, indent=2) + "\n")
     return summary
@@ -623,12 +633,14 @@ def main(argv=None) -> dict:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--qc-mad-k", type=float, default=QC_MAD_K)
+    ap.add_argument("--split", default=None)
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
 
-    summary = fit_corpus(args.corpus, args.out, args.probe_dir, args.steps,
-                         args.probes, args.seed, args.limit, args.device,
-                         args.qc_mad_k, progress=not args.quiet)
+    summary = fit_corpus(
+        args.corpus, args.out, args.probe_dir, args.steps, args.probes,
+        args.seed, args.limit, args.device, args.qc_mad_k,
+        progress=not args.quiet, split=args.split)
     print(json.dumps({k: v for k, v in summary.items() if k != "stations"}, indent=2))
     return summary
 

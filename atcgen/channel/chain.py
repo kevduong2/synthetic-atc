@@ -102,11 +102,13 @@ class ChannelRecord:
     hops: int = 1
     clean_arm: bool = False
     snr_db: float | None = None
+    residual_alpha: float | None = None
     steps: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {"hops": self.hops, "clean_arm": self.clean_arm,
-                "snr_db": self.snr_db, "steps": self.steps}
+                "snr_db": self.snr_db, "residual_alpha": self.residual_alpha,
+                "steps": self.steps}
 
     def applied(self) -> list[str]:
         return [step["primitive"] for step in self.steps]

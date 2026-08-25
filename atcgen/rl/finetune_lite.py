@@ -18,6 +18,7 @@ label id), and the redundant leading start-of-transcript column that
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 import numpy as np
 import torch
@@ -58,7 +59,8 @@ def _collate(batch: list[Feature], decoder_start_token_id: int | None) -> dict[s
 
 
 def finetune(model, features: list[Feature], *, steps: int, batch_size: int, lr: float,
-            seed: int, device, warmup_frac: float = 0.1) -> object:
+            seed: int, device, warmup_frac: float = 0.1,
+            on_step: Callable[[int, float], None] | None = None) -> object:
     """Train `model` for `steps` optimizer steps against `features`.
 
     Batches are drawn with a seeded `numpy.random.Generator`: a fresh
@@ -110,7 +112,10 @@ def finetune(model, features: list[Feature], *, steps: int, batch_size: int, lr:
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         scheduler.step()
-        losses.append(float(loss.detach().cpu()))
+        loss_value = float(loss.detach().cpu())
+        losses.append(loss_value)
+        if on_step is not None:
+            on_step(step + 1, loss_value)
         if (step + 1) % 100 == 0 or step + 1 == steps:
             rate = (step + 1) / max(time.monotonic() - t_start, 1e-6)
             recent = sum(losses[-100:]) / len(losses[-100:])

@@ -77,11 +77,18 @@ def write_presets(path: str | Path, presets: Iterable[Preset]) -> Path:
     return out
 
 
-def load_presets(path: str | Path) -> list[Preset]:
+def load_presets(path: str | Path,
+                 expect_split: str | None = None) -> list[Preset]:
     presets = [Preset.from_dict(json.loads(line))
                for line in Path(path).read_text().splitlines() if line.strip()]
     if not presets:
         raise ValueError(f"no presets in {path}")
+    if expect_split is not None:
+        offenders = sorted(
+            preset.clip_id for preset in presets if preset.split != expect_split)
+        if offenders:
+            raise ValueError(
+                f"presets outside split {expect_split!r}: {', '.join(offenders)}")
     return presets
 
 

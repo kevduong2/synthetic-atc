@@ -100,6 +100,7 @@ calibrated:
     enabled: false          # the CUT translator is M2.4; nothing to load yet
     checkpoint: runs/cut_v1/G_ema.pt
     apply_prob: 0.5
+    alpha: 1.0             # scalar, or {uniform: [lo, hi]}, toward the DSP endpoint
     residual_scale_max: 0.35
 
   # Effects the fitted chain cannot produce, because they are events rather than

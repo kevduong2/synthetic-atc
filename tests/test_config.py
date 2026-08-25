@@ -155,6 +155,7 @@ calibrated:
     enabled: false
     checkpoint: model.pt
     apply_prob: 0.0
+    alpha: {uniform: [0.25, 0.75]}
     residual_scale_max: 0.2
   post_effects:
     squelch: {prob: 0.7, gated_floor_prob: 0.5}
@@ -172,5 +173,39 @@ calibrated:
     assert config.calibrated is not None
     assert config.calibrated.calibration.station_mix == {"TOWER": 1.0}
     assert config.calibrated.residual.enabled is False
+    assert config.calibrated.residual.alpha == DistSpec(
+        "uniform", [0.25, 0.75])
     assert config.calibrated.expansion.target_total == 100
     assert config.calibrated.expansion.external_texts == "emergency.jsonl"
+
+
+def test_residual_defaults_disabled_with_unit_alpha(tmp_path):
+    path = tmp_path / "mode2_default.yaml"
+    path.write_text("mode: calibrated\ncalibrated: {}\n")
+
+    residual = load_config(path).calibrated.residual
+
+    assert residual.enabled is False
+    assert residual.alpha == DistSpec("const", 1.0)
+
+
+@pytest.mark.parametrize(("yaml_value", "kind", "value"), [
+    ("0.4", "const", 0.4),
+    ("{uniform: [0.2, 0.8]}", "uniform", [0.2, 0.8]),
+])
+def test_residual_alpha_parses_scalar_and_uniform(tmp_path, yaml_value, kind, value):
+    path = tmp_path / "mode2_alpha.yaml"
+    path.write_text(
+        "mode: calibrated\ncalibrated:\n  residual:\n"
+        f"    alpha: {yaml_value}\n")
+
+    assert load_config(path).calibrated.residual.alpha == DistSpec(kind, value)
+
+
+def test_residual_apply_probability_is_validated(tmp_path):
+    path = tmp_path / "bad_residual.yaml"
+    path.write_text(
+        "mode: calibrated\ncalibrated:\n  residual:\n    apply_prob: 1.1\n")
+
+    with pytest.raises(ValueError, match=r"calibrated\.residual\.apply_prob"):
+        load_config(path)
