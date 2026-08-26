@@ -47,7 +47,7 @@ NCE_TEMPERATURE = 0.07
 SHIFT_FRACTION = 0.125
 MASK_FRACTION = 0.125
 GAIN_RANGE = 0.1
-SELECTION_RULE = "lexicographic_v1"
+SELECTION_RULE = "lexicographic_v1.1_fold_paired_tiebreak"
 
 
 def _read_wav(path: str | Path, sr: int = TARGET_SR) -> np.ndarray:
@@ -540,9 +540,25 @@ def _select(out: Path, evaluations: list[dict[str, Any]], ema: Ema,
             report["selection"] = {"status": "no_eligible_candidate"}
         else:
             best = min(eligible, key=lambda row: row["kid_mean"])
-            threshold = best["kid_mean"] + best["kid_se"]
-            selected = min((row for row in eligible
-                            if row["kid_mean"] <= threshold),
+
+            def within_paired_se(row: dict[str, Any]) -> bool:
+                # The marginal kid_se measures between-fold (station) spread,
+                # not candidate uncertainty; two candidates scored on the
+                # same folds compare by their paired per-fold differences.
+                shared = [name for name, value in best["folds"].items()
+                          if value is not None
+                          and row["folds"].get(name) is not None]
+                if not shared:
+                    return row is best
+                diffs = [row["folds"][name] - best["folds"][name]
+                         for name in shared]
+                mean = sum(diffs) / len(diffs)
+                if len(diffs) < 2:
+                    return mean <= 0.0
+                var = sum((d - mean) ** 2 for d in diffs) / (len(diffs) - 1)
+                return mean <= math.sqrt(var / len(diffs))
+
+            selected = min((row for row in eligible if within_paired_se(row)),
                            key=lambda row: row["step"])
             candidate = out / "checkpoints" / f"step_{selected['step']:06d}.pt"
             model, _ = load_generator(candidate)

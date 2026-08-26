@@ -173,20 +173,26 @@ def test_nonfinite_loss_saves_state_and_names_step(toy_data, tmp_path, monkeypat
     assert (out / "state_latest.pt").exists()
 
 
-def test_eval_selection_uses_earliest_candidate_within_best_se(toy_data, tmp_path,
-                                                               monkeypatch):
-    scripted = [(0.10, 0.03), (0.08, 0.03), (0.20, 0.01)]
+def test_eval_selection_earliest_within_fold_paired_se(toy_data, tmp_path,
+                                                       monkeypatch):
+    # step 2 has the best mean; step 1 is within one SE of the paired
+    # per-fold differences (mean +0.00075 vs se ~0.00125), so the earliest
+    # tie-break selects step 1. Step 3 is far worse on both folds.
+    scripted = [{"a": 0.101, "b": 0.0585}, {"a": 0.099, "b": 0.059},
+                {"a": 0.20, "b": 0.20}]
 
     class ScriptedTracker:
         def __init__(self, *args, **kwargs):
             self.index = 0
 
         def __call__(self, translator):
-            kid_mean, kid_se = scripted[self.index]
+            folds = scripted[self.index]
             self.index += 1
+            values = list(folds.values())
+            mean = sum(values) / len(values)
             result = {"gates_ok": True, "gates": [{"ok": True}],
-                      "residual_sat": 0.0, "folds": {"a": kid_mean},
-                      "kid_mean": kid_mean, "kid_se": kid_se}
+                      "residual_sat": 0.0, "folds": folds,
+                      "kid_mean": mean, "kid_se": 0.01}
             return result, [np.zeros(1000, dtype=np.float32)] * 2
 
     monkeypatch.setattr(rt, "KidTracker", ScriptedTracker)
@@ -197,5 +203,5 @@ def test_eval_selection_uses_earliest_candidate_within_best_se(toy_data, tmp_pat
     report = json.loads((out / "validation_report.json").read_text())
     assert len(report["evaluations"]) == 3
     assert report["selection"]["step"] == 1
-    assert report["selection"]["rule"] == "lexicographic_v1"
+    assert report["selection"]["rule"] == "lexicographic_v1.1_fold_paired_tiebreak"
     assert (out / "G_selected.pt").exists()
