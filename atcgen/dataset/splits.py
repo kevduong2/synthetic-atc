@@ -131,6 +131,13 @@ SPLITS: dict[str, SplitSpec] = {
             purpose="historical: runs/rl_v1 A/B verification",
             policy="burned; never reuse for a headline number",
         ),
+        SplitSpec(
+            "heldout_tail_check", "test", 2500, None,
+            purpose="FastCUT plan §10.2: underpowered directional check "
+                    "(~427 rows, ~6-point MDE)",
+            policy="descriptive only; never a locked test -- the corpus "
+                   "already shaped the design",
+        ),
     )
 }
 

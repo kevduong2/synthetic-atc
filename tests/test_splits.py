@@ -63,6 +63,7 @@ def test_registry_matches_the_documented_experiment_protocol():
         "train_tail": ("train", 10000, None),
         "locked_test": ("test", 500, 2500),
         "spent_test": ("test", 0, 500),
+        "heldout_tail_check": ("test", 2500, None),
     }
     assert SPLIT_NAMES == tuple(SPLITS)
 
