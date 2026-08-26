@@ -129,3 +129,55 @@ training distribution.
 The results are mirrored in the local MLBucket dashboard at
 [http://localhost:8484](http://localhost:8484), under projects
 `atcgan-rl-v1`, `atcgan-matrix-v1`, and `atcgan-bandit`.
+
+## FastCUT go/no-go and fc_combo (2026-08-26)
+
+The leakage repair passed its audit: 99 corpus clips, 85 `channel_train`
+clips, 82 presets, and 127 noise-stat entries were checked, with no forbidden
+source IDs and no mismatches. The channel split followed the plan's
+development-only rule: `channel_train` and `channel_val` are grouped by
+station plus capture time-block, and artifacts are derived from
+`channel_train` only. There is still no `channel_test`, so this does not
+support a receiver/session-generalization claim.
+
+The G1-versus-G3 premise check was a tie: 68.55% for G1 procedural matched
+versus 68.79% for G3 calibrated DSP. The paired S1 ablation selected
+`M0/source+identity-NCE` over `M0/source-NCE`. S2 selected step 3500 under the
+lexicographic rule: fold-KID was 0.003562 versus 0.004041 for DSP-only.
+
+The ASR screen returned `conditional_go`, funding the full-scale FC matrix.
+The seed-0 FC-A2-versus-FC-A4 result was flat at -0.13 points; seed 1 was
+positive at +1.31 points [0.05, 2.94], p=0.036. The synth-only sensitive
+instrument was +1.30 points, non-significant. G5 gate yield was 39.55% versus
+39.45% for G3. The verdict recorded no material safety regression and noted
+that noninferiority margins were not pre-frozen.
+
+The scale-arm WERs were FC-A2 23.27%, FC-A3 22.73%, and FC-A4 24.64%; the
+reported +GRPO values were 20.79% and 20.56%.
+
+For `fc_combo`—75% `real_train` and 25% synthetic data, 2,000 SFT steps and
+600 GRPO steps—the historical `locked_test` is now `spent_test_fastcut`:
+one read per seed and development evidence. The paired results are below;
+delta is baseline WER minus `fc_combo` WER, in percentage points.
+
+| Seed | fc_combo WER | vs A4: delta / p | vs A1: delta / p |
+|---:|---:|---:|---:|
+| 0 | 19.87% | +0.47 / 0.482 | +2.53 / 0.004 |
+| 1 | 19.51% | +0.84 / 0.1 | +2.89 / 0.0 |
+| 2 | 20.61% | -0.26 / 0.727 | +1.80 / 0.136 |
+| **Mean** | **20.00%** | — | — |
+
+The baselines are A4 at 20.35% and A1 real-only at 22.40%. The
+`heldout_tail_check` remains descriptive, with an approximately six-point
+minimum detectable effect.
+
+### Claim discipline
+
+> Development/feasibility evidence. Seed-mean 20.00% beats A4's single-seed
+> 20.35% (2 of 3 seeds below it); per-seed deltas vs A4 are inside this test's
+> power, exactly as the plan's power analysis predicted for sub-point effects.
+> The clean claim: fc_combo beats real-only SFT by 2.4 mean / 2.9 best abs WER
+> (vs A4's 2.06) with no entity/callsign regression and record entity F1. A4
+> itself is one seed; a 3-seed A4 replication would be needed for a fair
+> seed-mean contrast. Confirmatory claims await a prospectively collected
+> session-disjoint test.
