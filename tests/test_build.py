@@ -3,6 +3,7 @@ no network, no GPU."""
 
 import json
 import random
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -550,7 +551,7 @@ def test_procedural_backend_rejects_missing_noise_beds_dir(tmp_path):
     channel = LIGHT_CHANNEL.replace(
         "channel:\n", f"channel:\n  noise: {{beds_dir: {missing}}}\n", 1)
 
-    with pytest.raises(ValueError, match=rf"no noise-bed wavs in {missing}"):
+    with pytest.raises(ValueError, match=rf"no noise-bed wavs in {re.escape(str(missing))}"):
         make_backend(config_for(tmp_path, channel=channel))
 
 

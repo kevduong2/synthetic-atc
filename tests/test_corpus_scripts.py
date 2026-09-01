@@ -86,7 +86,7 @@ def run_join(tmp_path, *extra):
     for stem in ("kixd_labeled", "kixd_train", "kixd_heldout", "kixd_dev",
                  "kixd_locked_day"):
         rows = [json.loads(line) for line in (out / f"{stem}.jsonl").open()]
-        splits[stem] = {row["audio"].rsplit("/", 1)[-1] for row in rows}
+        splits[stem] = {Path(row["audio"]).name for row in rows}
     return summary, splits, out
 
 
