@@ -127,3 +127,21 @@ def test_local_corpus_per_station_cap_bounds_the_ingest(tmp_path: Path):
     assert stats["total_files"] == 15 and stats["selected_files"] == 8
     assert stats["stations"] == {"KEUG_TOWER": 3, "KIXD_TOWER": 5}
     assert len(list((tmp_path / "out" / "clips").glob("*.wav"))) == 8
+
+
+def test_local_corpus_stations_filter_skips_other_and_unknown(tmp_path: Path):
+    import pytest
+    from atcgen.dataset.local_corpus import build_corpus
+
+    src = tmp_path / "clips"
+    src.mkdir()
+    rng = np.random.default_rng(1)
+    for name in ["KIXD_TOWER_20250801_000001.wav", "KIXD_TOWER_20250801_000002.wav",
+                 "KC_CENTER_20250801_000001.wav", "KIXD_TOWER_8-1-2025_clip7.wav"]:
+        sf.write(src / name, (0.3 * rng.standard_normal(16000)).astype(np.float32), 16000)
+    manifest = build_corpus(src, tmp_path / "out", stations=["KIXD_TOWER"])
+    stats = json.loads((manifest.parent / "corpus_stats.json").read_text())
+    assert stats["stations"] == {"KIXD_TOWER": 2}
+    assert stats["filtered_out"] == 2 and stats["total_files"] == 4
+    with pytest.raises(ValueError, match="KEUG_TOWER"):
+        build_corpus(src, tmp_path / "out2", stations=["KIXD_TOWER", "KEUG_TOWER"])

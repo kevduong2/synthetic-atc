@@ -143,6 +143,7 @@ def build_corpus(
     holdout_frac: float = 0.15,
     seed: int = 0,
     per_station: int | None = None,
+    stations: list[str] | None = None,
 ) -> Path:
     """Normalize local WAVs, apply QC, and write ``corpus.jsonl``.
 
@@ -165,6 +166,15 @@ def build_corpus(
 
     paths = sorted(p for p in src.rglob("*") if p.is_file() and p.suffix.lower() == ".wav")
     total_files = len(paths)
+    filtered_out = 0
+    if stations is not None:
+        wanted = set(stations)
+        kept_paths = [p for p in paths if parse_station(p) in wanted]
+        filtered_out = len(paths) - len(kept_paths)
+        paths = kept_paths
+        missing = sorted(wanted - {parse_station(p) for p in paths})
+        if missing:
+            raise ValueError("no files for requested station(s): " + ", ".join(missing))
     if per_station is not None:
         paths = cap_per_station(paths, per_station, seed)
     drops = Counter({
@@ -236,6 +246,8 @@ def build_corpus(
         "source_dir": str(src),
         "total_files": total_files,
         "per_station_cap": per_station,
+        "stations_filter": stations,
+        "filtered_out": filtered_out,
         "selected_files": len(paths),
         "kept": len(records),
         "dropped": dict(drops),
@@ -258,9 +270,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--per-station", type=int, default=None,
                         help="keep at most N source files per station (seeded draw)")
+    parser.add_argument("--stations", default=None,
+                        help="comma-separated station prefixes to ingest; everything else "
+                             "(other stations, files with unparseable names) is skipped")
     args = parser.parse_args()
+    stations = [s.strip() for s in args.stations.split(",") if s.strip()] if args.stations else None
     manifest = build_corpus(args.src_dir, args.out_dir, args.holdout_frac, args.seed,
-                            per_station=args.per_station)
+                            per_station=args.per_station, stations=stations)
     stats = json.loads((manifest.parent / "corpus_stats.json").read_text())
     print(json.dumps({"manifest": str(manifest), **stats}, indent=2))
 
