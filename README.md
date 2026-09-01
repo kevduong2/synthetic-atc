@@ -56,6 +56,7 @@ Use [docs/cli-reference.md](docs/cli-reference.md) for commands and
 
 ```bash
 uv sync                                  # deps (Mac/MPS supported)
+uv pip install -e ../MLBucket/sdk        # optional MLBucket run tracking (see AGENTS.md)
 uv run pytest -q                         # test suite
 
 # generate + gate a dataset

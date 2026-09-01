@@ -21,7 +21,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
 # Only the HTML report's plots need an extra package. The Tier 1/2 embedding
 # metrics (embed_dist.py, probe.py) add nothing: WavLM *and* CLAP both ship in
 # `transformers`, already a base dependency, so `laion-clap` is not required.
@@ -37,10 +36,5 @@ packages = ["atcgen"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.uv.sources]
-mlbucket = { path = "../MLBucket/sdk", editable = true }
-
 [dependency-groups]
-dev = [
-    "mlbucket",
-]
+dev = ["pytest>=8.0"]
