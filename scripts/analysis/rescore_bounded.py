@@ -9,12 +9,12 @@ cell and compared on equal terms without rerunning anything.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import statistics
 from pathlib import Path
 
-RUN = Path("runs/power_check_kixd")
-BASE = RUN / "harness" / "baseline"
+DEFAULT_RUN = Path("runs/power_check_kixd")
 
 
 def rows(p: Path) -> list[dict]:
@@ -30,14 +30,18 @@ def score(rs: list[dict]) -> tuple[float, float, int]:
     return e / w, cap / w, n
 
 
-def main() -> None:
-    base_rows = rows(next(BASE.glob("*_rows.jsonl")))
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("run", nargs="?", default=str(DEFAULT_RUN),
+                    help="power-check run dir with harness/ and trials/ (default %(default)s)")
+    run = Path(ap.parse_args(argv).run)
+    base_rows = rows(next((run / "harness" / "baseline").glob("*_rows.jsonl")))
     b_un, b_bd, b_n = score(base_rows)
     print(f"zero-shot baseline: unbounded {b_un:.4f}  bounded {b_bd:.4f}  "
           f"({b_n} rows capped)\n")
 
     cells = {}
-    for f in sorted(RUN.glob("trials/*/dev_rows.jsonl")):
+    for f in sorted(run.glob("trials/*/dev_rows.jsonl")):
         cells[f.parent.name] = rows(f)
 
     print(f"{'cell':<14}{'WER_unb':>9}{'WER_bnd':>9}{'capped':>8}"

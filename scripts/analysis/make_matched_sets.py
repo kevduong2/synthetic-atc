@@ -13,6 +13,7 @@ stays honest.
 """
 from __future__ import annotations
 
+import argparse
 import random
 import shutil
 import sys
@@ -25,7 +26,6 @@ SR = 16000
 FRAME = 320                 # 20 ms
 TRIM_REL_DB = -35.0         # keep frames within 35 dB of the clip's peak frame
 TARGET_RMS_DB = -26.0
-OUT = Path("/Users/kevin/.claude/jobs/4d7720e4/tmp/kidsets")
 
 
 def trim_and_norm(x: np.ndarray) -> np.ndarray | None:
@@ -69,24 +69,42 @@ def build(src_files: list[Path], dst: Path, matched: bool) -> int:
     return n
 
 
-def main() -> None:
-    rng = random.Random(0)
-    reals = sorted(Path("runs/calib_kixd/clips").glob("*.wav"))
-    ref = rng.sample(reals, 1000)
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--out", required=True, help="directory that receives the matched sets")
+    ap.add_argument("--real-dir", default="runs/calib_kixd/clips",
+                    help="real 16 kHz reference clips (default %(default)s)")
+    ap.add_argument("--n-ref", type=int, default=1000,
+                    help="fixed reference subset size; 1,000 reproduces the full-set KID")
+    ap.add_argument("--seed", type=int, default=0, help="reference subset draw")
+    ap.add_argument("--syn", action="append", default=[], metavar="TAG=DIR",
+                    help="synthetic wav dir to match, e.g. --syn mode2=runs/e1_mode2_kixd/wavs")
+    args = ap.parse_args(argv)
+    out = Path(args.out)
+
+    rng = random.Random(args.seed)
+    reals = sorted(Path(args.real_dir).glob("*.wav"))
+    if len(reals) < args.n_ref:
+        sys.exit(f"{args.real_dir}: {len(reals)} clips, need {args.n_ref}")
+    ref = rng.sample(reals, args.n_ref)
     sets = {
         "ref_raw": (ref, False),
         "ref_matched": (ref, True),
     }
-    for tag, d in (("mode1", "runs/power_check_kixd/trials/base_s0/synth/wavs"),
-                   ("mode2", "runs/e1_mode2_kixd/wavs")):
+    for item in args.syn:
+        tag, sep, d = item.partition("=")
+        if not sep:
+            sys.exit(f"--syn expects TAG=DIR, got {item!r}")
         files = sorted(Path(d).glob("*.wav"))
+        if not files:
+            sys.exit(f"{d}: no wavs")
         sets[f"{tag}_raw"] = (files, False)
         sets[f"{tag}_matched"] = (files, True)
 
     for name, (files, matched) in sets.items():
-        n = build(files, OUT / name, matched)
+        n = build(files, out / name, matched)
         durs, zf, rms = [], [], []
-        for p in sorted((OUT / name).glob("*.wav"))[:400]:
+        for p in sorted((out / name).glob("*.wav"))[:400]:
             x, _ = sf.read(str(p), dtype="float64")
             durs.append(len(x) / SR)
             zf.append(float(np.mean(x == 0.0)))
@@ -94,6 +112,12 @@ def main() -> None:
         print(f"{name:<14} n={n:<5} dur_med={np.median(durs):6.2f}s  "
               f"zerofrac={np.mean(zf):.3f}  rms_db_med={np.median(rms):7.2f}",
               flush=True)
+    tags = [t.partition("=")[0] for t in args.syn]
+    if tags:
+        print("\nnext, matched KID per synthetic set (quote only these):")
+        for t in tags:
+            print(f"  uv run python -m atcgen.eval.embed_dist {out / (t + '_matched')} "
+                  f"{out / 'ref_matched'} --device cuda --out {out / ('kid_' + t + '_matched.json')}")
 
 
 if __name__ == "__main__":

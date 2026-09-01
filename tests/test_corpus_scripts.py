@@ -136,7 +136,7 @@ def test_join_csv_and_jsonl_agree_and_paths_are_absolute(tmp_path):
     rows = [json.loads(line) for line in (out / "kixd_train.jsonl").open()]
     csv_rows = list(csv.DictReader((out / "kixd_train.csv").open(newline="")))
     assert rows == [dict(row) for row in csv_rows]
-    assert all(row["audio"].startswith("/") for row in rows)
+    assert all(Path(row["audio"]).is_absolute() for row in rows)
 
 
 def test_join_refuses_a_dev_slice_larger_than_its_day(tmp_path):
@@ -265,7 +265,7 @@ def test_export_drops_noise_only_rows_and_never_shares_a_transcript(tmp_path):
     assert len(train) + len(test) == 40
     assert {r["text"] for r in train}.isdisjoint({r["text"] for r in test})
     assert {r["suspect"] for r in train + test} == {"False"}
-    assert all(r["audio"].startswith("/") for r in train + test)
+    assert all(Path(r["audio"]).is_absolute() for r in train + test)
     # both airports are represented in the held-out slice
     assert len({r["text"].split()[0] for r in test}) == 2
 

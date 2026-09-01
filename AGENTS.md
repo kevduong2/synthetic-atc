@@ -1,5 +1,20 @@
 # Agent / contributor notes
 
+Running the 3080 experiment window? Start with `agents-experiment-handoff.md`
+— it carries the lab discipline, pre-registered decision rules, and exact
+commands for that session.
+
+## Agent team and lab protocol (GitHub Copilot)
+
+Custom agents live in `.github/agents/` (`lab-director` is the entry point;
+`senior-researcher`, `experiment-engineer`, `lab-assistant`, `results-auditor`
+are its specialists) and shared skills in `.github/skills/` (`lab-protocol`,
+`generator-config`, `gpu-jobs`, `monitor-run`, `paired-analysis`,
+`asr-feedback-loop`). Coordination is file-based under `lab/` (board, briefs,
+specs, reports); long jobs run through `scripts/lab/jobs.py`, which also
+enforces the one-GPU-stream rule. Read `.github/skills/lab-protocol/SKILL.md`
+before writing a brief, spec or report.
+
 ## Pre-release status: no compatibility or versioning obligations
 
 This project is **not released and nothing is pinned**. Until that changes:

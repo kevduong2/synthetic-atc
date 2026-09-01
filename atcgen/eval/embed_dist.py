@@ -56,6 +56,8 @@ def _torch_device(device=None):
 
     if device is not None:
         return torch.device(device)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
@@ -291,7 +293,7 @@ def main(argv=None) -> dict:
                     help="WavLM hidden_states index (default %(default)s)")
     ap.add_argument("--subsets", type=int, default=KID_SUBSETS)
     ap.add_argument("--subset-size", type=int, default=KID_SUBSET_SIZE)
-    ap.add_argument("--device", help="torch device (default mps if available)")
+    ap.add_argument("--device", help="torch device (default: cuda, else mps, else cpu)")
     ap.add_argument("--out", help="write the full JSON report here")
     args = ap.parse_args(argv)
 

@@ -18,6 +18,9 @@ dependencies = [
     "librosa>=0.11.0",
     "pyyaml>=6.0.3",
     "pyloudnorm>=0.1",
+    # Kokoro's G2P (misaki) does `spacy.load("en_core_web_sm")` and would try to
+    # pip-install it on first use; uv venvs have no pip, so pin the wheel here.
+    "en-core-web-sm",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +38,19 @@ packages = ["atcgen"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Windows: PyPI's win_amd64 torch wheel is CPU-only, so resolve torch/torchaudio
+# from the CUDA 12.6 index there (RTX 3080 needs NVIDIA driver >= 560). macOS and
+# Linux keep PyPI. To move to a newer CUDA, change the index url and re-lock.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32'" }]
+torchaudio = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32'" }]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

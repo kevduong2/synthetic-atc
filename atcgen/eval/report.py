@@ -143,5 +143,5 @@ def build_report(out_path: str | Path, synthetic: dict, real: dict | None = None
         parts.append("<h2>Audition</h2>" + _audition_html(audition, out.parent))
 
     out.write_text(f"<!doctype html><meta charset=utf-8><title>{html.escape(title)}</title>"
-                   f"<style>{_CSS}</style>" + "".join(parts))
+                   f"<style>{_CSS}</style>" + "".join(parts), encoding="utf-8")
     return out

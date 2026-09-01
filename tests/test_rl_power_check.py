@@ -7,6 +7,7 @@ right -- the number a go/no-go on the search will be read off.
 """
 
 import json
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -142,7 +143,7 @@ class _FakeHarness:
                                 "wer_bounded": {"atc_normalized": 0.5}}
 
     def __call__(self, config, trial_dir):
-        arm = trial_dir.rsplit("/", 1)[-1]
+        arm = Path(trial_dir).name
         _FakeHarness.calls.append((arm, self.gen_seed, self.ft_seed))
         return _FakeResult(-0.2 if arm.startswith("degraded") else 0.1)
 

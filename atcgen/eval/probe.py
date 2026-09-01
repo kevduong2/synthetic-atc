@@ -222,7 +222,7 @@ def main(argv=None) -> dict:
     ap.add_argument("--hidden", type=int, help="use an MLP with this hidden size")
     ap.add_argument("--no-null", action="store_true",
                     help="skip the real-vs-real chance-floor control")
-    ap.add_argument("--device", help="torch device (default mps if available)")
+    ap.add_argument("--device", help="torch device (default: cuda, else mps, else cpu)")
     ap.add_argument("--out", help="write the full JSON report here")
     args = ap.parse_args(argv)
 

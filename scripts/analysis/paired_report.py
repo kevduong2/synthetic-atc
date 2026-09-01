@@ -11,11 +11,12 @@ change are on one metric.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import statistics as st
 from pathlib import Path
 
-RUN = Path("runs/power_check_kixd")
+DEFAULT_RUN = Path("runs/power_check_kixd")
 
 
 def rows(p: Path) -> list[dict]:
@@ -27,10 +28,14 @@ def bounded(rs: list[dict]) -> float:
     return sum(min(r["errors"], r["ref_words"]) for r in rs) / w
 
 
-def main() -> None:
-    base_wer = bounded(rows(next((RUN / "harness" / "baseline").glob("*_rows.jsonl"))))
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("run", nargs="?", default=str(DEFAULT_RUN),
+                    help="power-check run dir with harness/ and trials/ (default %(default)s)")
+    run = Path(ap.parse_args(argv).run)
+    base_wer = bounded(rows(next((run / "harness" / "baseline").glob("*_rows.jsonl"))))
     cell = {f.parent.name: base_wer - bounded(rows(f))
-            for f in RUN.glob("trials/*/dev_rows.jsonl")}
+            for f in run.glob("trials/*/dev_rows.jsonl")}
 
     arms, seeds = {}, set()
     for name in cell:

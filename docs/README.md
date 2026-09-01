@@ -17,3 +17,5 @@ for behavior and thresholds.
 - [results.md](results.md) — evidence snapshot for 2026-08-25.
 - [known-issues.md](known-issues.md) — operational, measurement, and corpus caveats.
 - [data-licensing.md](data-licensing.md) — data provenance and license status.
+- [data-handoff.md](data-handoff.md) — how to deliver the remaining airport audio (format, balance, transcripts).
+- [../agents-experiment-handoff.md](../agents-experiment-handoff.md) — the RTX 3080 window: Windows setup gate, phases, decision rules; run by the Copilot agent team in `.github/agents/`.
