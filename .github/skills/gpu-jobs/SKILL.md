@@ -56,7 +56,7 @@ whisper-tiny SFT s/step) and replace every MPS-extrapolated number in the docs.
 | `scripts/rl_power_check.py` | per cell: finished cells are read back from `results.jsonl` |
 | `scripts/rl_loop.py` | resumes trial numbering and optimizer state; `--no-resume` restarts |
 | `atcgen.channel.learned.residual_train` | `--resume <ckpt>`; saves every `--save-every` steps |
-| `scripts/generate_dataset.py` | not resumable: shard by seed into separate `--out` dirs, export together |
+| `scripts/generate_dataset.py` | not resumable (`stats.json` only at the end): shard the text with `scripts/lab/shard_text.py --n 4`, one seed and `--out` per shard, export together |
 | `scripts/gate_dataset.py` | rerun from scratch; cheap relative to rendering |
 | `training/finetune_whisper.py`, `training/recipe.py` | rerun from scratch |
 
@@ -77,7 +77,8 @@ changes; caches key off corpus and would silently mix definitions.
 
 ## 6. Windows specifics
 
-- PowerShell, not bash: no heredocs (put snippets in `scripts/analysis/`), no
+- PowerShell, not bash: no heredocs (put snippets in `scripts/analysis/`; the
+  probe resample is `scripts/lab/resample_probes.py`), no
   `\` continuation, no `export` (`$env:NAME = "value"`), `unzip` is
   `Expand-Archive`. Quote `--set key=value` overrides as one token.
 - Paths: forward slashes work everywhere in this repo; every manifest under

@@ -61,9 +61,13 @@ that completes will contain everything.
 is applied downstream, where it belongs:
 
 - `local_corpus` stratifies its splits by station.
-- `channel_fit --limit N` samples presets across stations; after it runs,
-  check `presets_stats.json` per-station counts and re-run with a per-station
-  cap if one station dominates (runbook §1 covers this).
+- `channel_fit --per-station N` caps the clips fitted per station with a
+  seeded draw, so the preset pool is balanced (plain `--limit` is a head
+  truncation of a file grouped by station — never use it alone on a
+  multi-airport corpus); check `presets_stats.json` per-station counts
+  afterwards (runbook §1 covers this).
+- `station_mix` in the production config sets how often each station's
+  channel is drawn at render time; unset, it follows preset counts.
 - Selection/eval metrics are macro-averaged per airport with a worst-airport
   guard, so a big station can't dominate scoring.
 - Two levers stay separate on the training side: **resampling** fixes

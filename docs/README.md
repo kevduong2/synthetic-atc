@@ -18,4 +18,5 @@ for behavior and thresholds.
 - [known-issues.md](known-issues.md) — operational, measurement, and corpus caveats.
 - [data-licensing.md](data-licensing.md) — data provenance and license status.
 - [data-handoff.md](data-handoff.md) — how to deliver the remaining airport audio (format, balance, transcripts).
+- [runbook-v1-3080.md](runbook-v1-3080.md) — the V1 production run on the RTX 3080 (PowerShell): recalibrate, residual, sharded render, gate, export; lab mission `lab/missions/prod-v1.md`.
 - [../agents-experiment-handoff.md](../agents-experiment-handoff.md) — the RTX 3080 window: Windows setup gate, phases, decision rules; run by the Copilot agent team in `.github/agents/`.

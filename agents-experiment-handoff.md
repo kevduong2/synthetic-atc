@@ -1,5 +1,10 @@
 # Experiment handoff — 6-hour RTX 3080 window
 
+**Scope:** this is the six-hour *experiment* window (evidence for V1.1). The
+*production* run — recalibrate on the full clip set, train the residual,
+render, gate, export — is a separate mission: `docs/runbook-v1-3080.md` with
+`lab/missions/prod-v1.md`. Do not mix the two in one GPU session.
+
 **Audience:** the GitHub Copilot agent team in `.github/agents/` (Kevin prompts
 `lab-director`; it delegates to `senior-researcher`, `experiment-engineer`,
 `lab-assistant`, `results-auditor`), or a junior scientist running solo.
@@ -58,7 +63,7 @@ the repo root; `git clone` brings none of it):
 uv python install 3.11                 # 3.11 or 3.12; the CUDA torch wheels exist for both
 uv sync                                # torch comes from the cu126 index on Windows (pyproject.toml); driver >= 560 required
 uv run python -c "import torch, soundfile; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0), soundfile.__libsndfile_version__)"
-uv run pytest -q                       # expect 780+ passed; the suite is Windows-clean
+uv run pytest -q                       # expect ~780 passed (775 + 2 skipped on the Mac); the suite is Windows-clean
 ```
 
 `cuda.is_available()` must print `True` (a `+cpu` torch means the CUDA index was
@@ -180,7 +185,7 @@ Clock notation: T+H:MM from when you start Phase 0. Checkpoints are hard.
 ### Phase 0 — Bench + sanity (T+0:00 → T+0:25)
 
 ```powershell
-uv run pytest -q                                   # expect 780+ passed
+uv run pytest -q                                   # expect ~780 passed
 uv run python scripts/lab/jobs.py launch --gpu --id win2-p0-bench -- uv run python scripts/bench_devices.py --device cuda --out runs/win2_bench.json
 ```
 

@@ -35,6 +35,7 @@ enough for tests but leaves a systematic tilt in real fits.
 
 import argparse
 import json
+import random
 import time
 from collections import Counter
 from pathlib import Path
@@ -503,12 +504,54 @@ def _corpus_rows(corpus: Path) -> list[dict]:
     return rows
 
 
+def select_rows(rows: list[dict], limit: int | None = None,
+                per_station: int | None = None, seed: int = 0) -> list[dict]:
+    """Choose which corpus rows to fit.
+
+    With `per_station`, every station contributes at most that many clips,
+    drawn with a seeded shuffle (the corpus file is grouped by station, so a
+    head-truncation would fit only the alphabetically first airports).  The
+    result is interleaved round-robin across stations so that a subsequent
+    `limit` still spans every station instead of exhausting one first.
+    Without either cap the rows come back unchanged, in file order.
+    """
+    if per_station is None and limit is None:
+        return list(rows)
+    rng = random.Random(seed)
+    by_station: dict[str, list[dict]] = {}
+    for row in rows:
+        by_station.setdefault(row.get("station", "unknown"), []).append(row)
+    picked: dict[str, list[dict]] = {}
+    for station, items in sorted(by_station.items()):
+        items = list(items)
+        if per_station is not None and len(items) > per_station:
+            rng.shuffle(items)
+            items = items[:per_station]
+        picked[station] = items
+    if per_station is None:
+        # a plain total cap keeps file order (single-station corpora, tests)
+        return rows[:limit]
+    interleaved: list[dict] = []
+    queues = [list(items) for _, items in sorted(picked.items())]
+    while any(queues):
+        for queue in queues:
+            if queue:
+                interleaved.append(queue.pop(0))
+    return interleaved if limit is None else interleaved[:limit]
+
+
 def fit_corpus(corpus_manifest: str | Path, out_path: str | Path,
                probe_dir: str | Path | None = None, steps: int = DEFAULT_STEPS,
                n_probes: int = DEFAULT_PROBES, seed: int = 0, limit: int | None = None,
                device: str = "cpu", qc_k: float = QC_MAD_K,
-               progress: bool = False, split: str | None = None) -> dict:
-    """Fit every clip in a corpus manifest, QC the results, write presets.jsonl."""
+               progress: bool = False, split: str | None = None,
+               per_station: int | None = None) -> dict:
+    """Fit every clip in a corpus manifest, QC the results, write presets.jsonl.
+
+    `per_station` caps the clips fitted per station with a seeded draw, so a
+    multi-airport corpus yields a balanced preset pool; `limit` is a plain
+    total cap applied afterwards in a station-interleaved order.
+    """
     corpus = Path(corpus_manifest)
     all_rows = _corpus_rows(corpus)
     input_counts = Counter(
@@ -516,7 +559,7 @@ def fit_corpus(corpus_manifest: str | Path, out_path: str | Path,
         for row in all_rows)
     rows = [row for row in all_rows
             if split is None or row.get("split") == split]
-    rows = rows[:limit]
+    rows = select_rows(rows, limit=limit, per_station=per_station, seed=seed)
     if not rows:
         suffix = f" for split {split!r}" if split is not None else ""
         raise ValueError(f"no clips in {corpus}{suffix}")
@@ -630,7 +673,11 @@ def main(argv=None) -> dict:
     ap.add_argument("--steps", type=int, default=DEFAULT_STEPS)
     ap.add_argument("--probes", type=int, default=DEFAULT_PROBES)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--limit", type=int, default=None,
+                    help="total cap on clips fitted (head of file unless --per-station)")
+    ap.add_argument("--per-station", type=int, default=None,
+                    help="cap clips per station with a seeded draw; balances a "
+                         "multi-airport corpus (the file is grouped by station)")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--qc-mad-k", type=float, default=QC_MAD_K)
     ap.add_argument("--split", default=None)
@@ -640,7 +687,7 @@ def main(argv=None) -> dict:
     summary = fit_corpus(
         args.corpus, args.out, args.probe_dir, args.steps, args.probes,
         args.seed, args.limit, args.device, args.qc_mad_k,
-        progress=not args.quiet, split=args.split)
+        progress=not args.quiet, split=args.split, per_station=args.per_station)
     print(json.dumps({k: v for k, v in summary.items() if k != "stations"}, indent=2))
     return summary
 

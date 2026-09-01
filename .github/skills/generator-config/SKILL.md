@@ -71,6 +71,17 @@ edge [0.5,0.85], `residual.apply_prob` [0,1], `residual_scale_max` [0.05,0.35],
 talker and batch-composition knobs), `default_atc_space` (mode 1 chain knobs).
 Fixed arms should stay inside these bounds; `build_arm` does not clamp.
 
+## 4b. Multi-station calibration (production config)
+
+`calibrated.calibration.station_mix` decides which station's channel each clip
+gets; unset, it follows preset counts, so a KIXD-heavy preset pool makes every
+airport's audio sound like KIXD. The production config sets it explicitly
+(uniform over the stations in `presets_stats.json`, names spelled exactly as
+there; a name with no presets raises at load). `cross_station_prob` (0.1,
+frozen) is a no-op with one station and live with several. Presets come from
+`channel_fit --per-station N`; plain `--limit` head-truncates a file grouped by
+station. See `docs/runbook-v1-3080.md` §1c.
+
 ## 5. Adding a fixed arm to `scripts/rl_power_check.py`
 
 Arms are entries in the `ARMS` dict: a list of `(knob, value)` mutations

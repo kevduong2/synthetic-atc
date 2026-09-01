@@ -1,8 +1,11 @@
 # Agent / contributor notes
 
-Running the 3080 experiment window? Start with `agents-experiment-handoff.md`
-— it carries the lab discipline, pre-registered decision rules, and exact
-commands for that session.
+Running on the 3080 box? Two missions exist, one per GPU session:
+`docs/runbook-v1-3080.md` + `lab/missions/prod-v1.md` is the V1 production run
+(recalibrate on the full clip set, residual, render, gate, export; Kevin's
+pre-launch checklist is `HUMAN.md`);
+`agents-experiment-handoff.md` is the six-hour experiment window, with the lab
+discipline, pre-registered decision rules, and exact commands for that session.
 
 ## Agent team and lab protocol (GitHub Copilot)
 
