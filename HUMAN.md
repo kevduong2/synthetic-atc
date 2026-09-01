@@ -45,6 +45,15 @@ the first four are done.
       `$env:HF_HOME` if the system drive is small.
 - [ ] NVIDIA driver ≥ 560 (the cu126 torch wheel needs it).
 
+## 3b. Or hand items 3–4 to an agent
+
+`lab/briefs/prod-setup.md` is a self-contained brief for any agent with a
+shell on the box: it unpacks both zips, checks the counts, runs the
+environment gate and the tests, and writes `lab/reports/prod-setup.md` with a
+READY YES/NO line. Give it the two zip paths. The data zip is built on the Mac
+with the payload command in that brief's header (or ask Claude for
+`atc-gan-data-payload.zip`, ~19 MB).
+
 ## 4. Environment gate on the box (10 minutes, runbook §0.2)
 
 ```powershell
