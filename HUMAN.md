@@ -40,9 +40,11 @@ the first four are done.
 | optional: `runs/calib_kixd/`, `runs/channel_data_kixd/` (2 GB) | only to compare new KIXD presets with the overnight ones |
 | optional: `reference-data-for-v1-run/asr/` (~4.5 GB) | only if you take the 24-hour plan below (asr training step) |
 
-- [ ] **Disk:** the render writes ~160k wavs, roughly 25–30 GB, plus ~3 GB
-      of HF model downloads and the clip set. Have ~60 GB free. Set
-      `$env:HF_HOME` if the system drive is small.
+- [ ] **Disk:** the delivered archive is ~209k clips (budget ~100 GB
+      extracted; check). The ingest keeps ≤1,500 per station (~2–3 GB of 16 kHz
+      copies), the render writes ~160k wavs (~25–30 GB), HF models ~3 GB.
+      Have the archive's size plus ~40 GB free. Set `$env:HF_HOME` if the
+      system drive is small.
 - [ ] NVIDIA driver ≥ 560 (the cu126 torch wheel needs it).
 
 ## 3b. Or hand items 3–4 to an agent

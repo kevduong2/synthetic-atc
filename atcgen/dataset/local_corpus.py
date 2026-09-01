@@ -119,13 +119,38 @@ def _assign_splits(records: list[dict], holdout_frac: float, seed: int) -> None:
             records[i]["split"] = "holdout" if i in holdout else "train"
 
 
+def cap_per_station(paths: list[Path], per_station: int, seed: int = 0) -> list[Path]:
+    """At most `per_station` files per station, drawn with a seeded shuffle, in sorted order."""
+    if per_station < 1:
+        raise ValueError("per_station must be >= 1")
+    rng = random.Random(seed)
+    by_station: dict[str, list[Path]] = {}
+    for path in paths:
+        by_station.setdefault(parse_station(path), []).append(path)
+    kept: list[Path] = []
+    for station in sorted(by_station):
+        items = list(by_station[station])
+        if len(items) > per_station:
+            rng.shuffle(items)
+            items = items[:per_station]
+        kept.extend(items)
+    return sorted(kept)
+
+
 def build_corpus(
     src_dir: str | Path,
     out_dir: str | Path,
     holdout_frac: float = 0.15,
     seed: int = 0,
+    per_station: int | None = None,
 ) -> Path:
-    """Normalize local WAVs, apply QC, and write ``corpus.jsonl``."""
+    """Normalize local WAVs, apply QC, and write ``corpus.jsonl``.
+
+    `per_station` keeps at most that many source files per station (seeded
+    draw before any decoding), so a 200k-clip delivery does not turn into
+    200k normalized copies on disk: calibration needs hundreds per station,
+    not tens of thousands, and every downstream stage is capped anyway.
+    """
     if not 0.0 <= holdout_frac <= 1.0:
         raise ValueError("holdout_frac must be between 0 and 1")
 
@@ -139,6 +164,9 @@ def build_corpus(
         old_clip.unlink()
 
     paths = sorted(p for p in src.rglob("*") if p.is_file() and p.suffix.lower() == ".wav")
+    total_files = len(paths)
+    if per_station is not None:
+        paths = cap_per_station(paths, per_station, seed)
     drops = Counter({
         "duplicate": 0,
         "silence_only": 0,
@@ -206,7 +234,9 @@ def build_corpus(
 
     stats = {
         "source_dir": str(src),
-        "total_files": len(paths),
+        "total_files": total_files,
+        "per_station_cap": per_station,
+        "selected_files": len(paths),
         "kept": len(records),
         "dropped": dict(drops),
         "resampled": resampled,
@@ -226,8 +256,11 @@ def main() -> None:
     parser.add_argument("out_dir", type=Path)
     parser.add_argument("--holdout-frac", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--per-station", type=int, default=None,
+                        help="keep at most N source files per station (seeded draw)")
     args = parser.parse_args()
-    manifest = build_corpus(args.src_dir, args.out_dir, args.holdout_frac, args.seed)
+    manifest = build_corpus(args.src_dir, args.out_dir, args.holdout_frac, args.seed,
+                            per_station=args.per_station)
     stats = json.loads((manifest.parent / "corpus_stats.json").read_text())
     print(json.dumps({"manifest": str(manifest), **stats}, indent=2))
 

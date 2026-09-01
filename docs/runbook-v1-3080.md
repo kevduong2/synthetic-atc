@@ -59,10 +59,15 @@ lands in station `unknown`. Below, `<clips_dir>` is that directory.
 
 ## 1. Recalibration (full diverse set)
 
-Balance is applied here, not by deleting data: `channel_fit --per-station N`
-draws at most N clips per station (seeded), so KIXD's 7,374 clips cannot crowd
-out a 150-clip station. (Plain `--limit` is a head truncation of a file that is
-grouped by station — never use it alone on this corpus.)
+Balance is applied here, not by deleting data. Two seeded per-station caps
+bound the work: `local_corpus --per-station 1500` keeps at most 1,500 source
+files per station before any decoding (the delivered archive holds ~209k
+clips; calibration needs hundreds per station, and 1,500 leaves the 1,000-clip
+KID reference subset and honest capture-block folds with room to spare), and
+`channel_fit --per-station 150` fits presets from at most 150 of those. Plain
+`--limit` on `channel_fit` is a head truncation of a file grouped by station —
+never use it alone on this corpus. The full archive stays on disk untouched;
+raising a cap later is a rerun of §1, not a re-delivery.
 
 ```powershell
 # 1a. probe TTS (Domain A) — scene text; build_paired_views writes Kokoro-native
@@ -72,7 +77,7 @@ uv run python scripts/build_paired_views.py base --out runs/gan_val_base_v1 --n 
 uv run python scripts/lab/resample_probes.py runs/gan_a_base_v1/clean runs/gan_val_base_v1/clean
 
 # 1b. ingest -> folds -> noise beds -> presets
-uv run python -m atcgen.dataset.local_corpus <clips_dir> runs/calib_v2
+uv run python -m atcgen.dataset.local_corpus <clips_dir> runs/calib_v2 --per-station 1500
 uv run python -m atcgen.dataset.channel_splits --corpus runs/calib_v2/corpus.jsonl --out runs/channel_data_v2
 uv run python -m atcgen.dataset.noise_harvest runs/channel_data_v2/corpus.jsonl runs/channel_data_v2/train/noise --split channel_train
 uv run python scripts/lab/jobs.py launch --gpu --id prod-p1-fit -- uv run python -m atcgen.channel.learned.channel_fit runs/channel_data_v2/corpus.jsonl runs/channel_data_v2/train/presets.jsonl --probe-dir runs/gan_a_base_v1/clean --split channel_train --per-station 150 --device cuda

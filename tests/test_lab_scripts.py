@@ -106,3 +106,24 @@ def test_filter_variants_attenuate_out_of_band_energy(tmp_path: Path, capsys):
     assert band_power(lp, 60) > 0.5 * band_power(x, 60)           # LP alone keeps hum
     assert band_power(lphp, 60) < 1e-2 * band_power(x, 60)        # HP removed hum
     assert band_power(lphp, 1000) > 0.5 * band_power(x, 1000)
+
+
+def test_local_corpus_per_station_cap_bounds_the_ingest(tmp_path: Path):
+    from atcgen.dataset.local_corpus import build_corpus, cap_per_station
+
+    src = tmp_path / "clips"
+    src.mkdir()
+    rng = np.random.default_rng(0)
+    names = [f"KIXD_TOWER_20250801_{i:06d}.wav" for i in range(12)] + \
+            [f"KEUG_TOWER_20250801_{i:06d}.wav" for i in range(3)]
+    for name in names:
+        sf.write(src / name, (0.3 * rng.standard_normal(16000)).astype(np.float32), 16000)
+    picked = cap_per_station(sorted(src.glob("*.wav")), 5, seed=0)
+    assert [p.name.startswith("KEUG") for p in picked].count(True) == 3
+    assert [p.name.startswith("KIXD") for p in picked].count(True) == 5
+    assert picked == cap_per_station(sorted(src.glob("*.wav")), 5, seed=0)
+    manifest = build_corpus(src, tmp_path / "out", per_station=5, seed=0)
+    stats = json.loads((manifest.parent / "corpus_stats.json").read_text())
+    assert stats["total_files"] == 15 and stats["selected_files"] == 8
+    assert stats["stations"] == {"KEUG_TOWER": 3, "KIXD_TOWER": 5}
+    assert len(list((tmp_path / "out" / "clips").glob("*.wav"))) == 8

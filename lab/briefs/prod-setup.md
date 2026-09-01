@@ -29,8 +29,8 @@ edit anything under `atcgen/`, `configs/`, `docs/`; commit.
 
 2. **Toolchain.** `uv --version` works (install from https://docs.astral.sh/uv/
    if not). `nvidia-smi` runs and shows driver ≥ 560 and the RTX 3080; record
-   the driver version and free VRAM. Record free disk on the repo's drive:
-   need ≥ 60 GB (`Get-PSDrive`).
+   the driver version and free VRAM. Record free disk on the repo's drive
+   (`Get-PSDrive`): need the extracted archive's size plus ≥ 40 GB.
 
 3. **Environment.**
    ```powershell
@@ -59,7 +59,8 @@ edit anything under `atcgen/`, `configs/`, `docs/`; commit.
    uv run python -m zipfile -t <CLIPS_ZIP>
    New-Item -ItemType Directory -Force reference-data-for-v1-run | Out-Null
    Expand-Archive <CLIPS_ZIP> -DestinationPath reference-data-for-v1-run/airport_clips_v2
-   Copy-Item data/real/calibration/*.wav reference-data-for-v1-run/airport_clips_v2/
+   # only if the station table below lacks KSDL_TOWER and data/real/calibration exists:
+   # Copy-Item data/real/calibration/*.wav reference-data-for-v1-run/airport_clips_v2/<same folder as the other wavs>/
    Get-ChildItem reference-data-for-v1-run/airport_clips_v2 -Recurse -Filter *.wav | ForEach-Object { $_.BaseName -replace '_\d{8}_\d{6}$','' } | Group-Object | Sort-Object Name | Select-Object Count,Name
    ```
    FAIL on the integrity test. Put the full station table in the report.
@@ -69,8 +70,9 @@ edit anything under `atcgen/`, `configs/`, `docs/`; commit.
    `^.+_\d{8}_\d{6}\.wav$`; those would land in station `unknown`:
    `Get-ChildItem ... -Filter *.wav | Where-Object { $_.Name -notmatch '^.+_\d{8}_\d{6}\.wav$' } | Measure-Object`
    If the archive extracted into a nested folder, say so; it is fine (the
-   ingest walks subdirectories) but the copy of the calibration wavs must go
-   into the same folder as the other wavs.
+   ingest walks subdirectories). The calibration-wav merge is only needed when
+   the archive has no KSDL_TOWER station; if `data/real/calibration` is absent
+   and KSDL_TOWER is present, skip it and say so — not a failure.
 
 6. **Tests.** `uv run pytest -q` — record the pass/skip/fail counts. Expect
    ~780 passed. Any failure: paste it, FAIL.
