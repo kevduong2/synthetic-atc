@@ -1,0 +1,179 @@
+# KIXD copy of `mode2_fastcut.yaml`: same profile, calibration artifacts and
+# residual checkpoint repointed at the KIXD_TOWER capture
+# (`reference-data-for-v1-run/updated_kixd_clips`, 7,374 clips, ~15.9 h,
+# 2025-08-01..08) instead of runs/channel_data_fastcut's four-station set.
+#
+# None of the `runs/` paths below exist until the calibration chain has run;
+# a Domain-A probe render has to come first, because `--probe-dir` is what
+# makes the fitted EQ map *our* voices onto the real spectrum:
+#   uv run python scripts/build_paired_views.py base \
+#       --out runs/gan_a_base_kixd --n 200 --seed 0 \
+#       --config configs/mode1_matched_kixd.yaml --text <scenes.jsonl>
+#   uv run python -m atcgen.dataset.local_corpus \
+#       reference-data-for-v1-run/updated_kixd_clips runs/calib_kixd
+#   uv run python -m atcgen.dataset.channel_splits \
+#       --corpus runs/calib_kixd/corpus.jsonl --out runs/channel_data_kixd
+#   uv run python -m atcgen.dataset.noise_harvest \
+#       runs/channel_data_kixd/corpus.jsonl runs/channel_data_kixd/train/noise \
+#       --split channel_train
+#   uv run python -m atcgen.channel.learned.channel_fit \
+#       runs/channel_data_kixd/corpus.jsonl \
+#       runs/channel_data_kixd/train/presets.jsonl \
+#       --probe-dir runs/gan_a_base_kixd/clean --split channel_train --limit 400
+#
+# One caveat this copy inherits from its source: KIXD is a *single* station, so
+# `channel_splits` cuts channel_train/channel_val by 15-minute capture gap
+# only. The val fold is session-disjoint but not receiver-disjoint, and there
+# is still no channel_test — nothing built on this profile supports a
+# receiver-generalization claim.
+#
+# ---------------------------------------------------------------------------
+#
+# Mode 2 profile for the FastCUT go/no-go: identical to
+# mode2_default.yaml except calibration artifacts come from the
+# leakage-repaired channel_train split.
+# Mode 2 `calibrated`: one fitted preset per real calibration clip, stamped
+# onto clean TTS (04 §2.3, §3).
+#
+# Where `mode1_matched.yaml` narrows hand-written distributions until their
+# aggregate statistics land near the real set's, this profile has no channel
+# distributions at all: it draws a real receiver's *measured* channel — band
+# shape, drive, AGC, noise floor — and pairs it with noise harvested from that
+# same receiver. Diversity comes from having ~100 of them (~1k once the full
+# labelled corpus is calibrated), not from widening a range.
+#
+# Both paths under `calibration:` are run-machine paths (`runs/` is gitignored);
+# the KIXD commands that produce them are at the top of this file.
+
+mode: calibrated
+seed: 0
+
+output:
+  sample_rate: 16000
+  format: wav
+  # Identical to mode1_matched.yaml, like everything else outside `calibrated:`.
+  # `lufs` would target loudness_lufs through EBU R128 instead; still rms here.
+  loudness_mode: rms
+  loudness_db: {uniform: [-25, -20]}
+  loudness_lufs: -23.0
+
+tts:
+  voices:
+    - af_heart
+    - af_bella
+    - af_nicole
+    - af_sarah
+    - af_sky
+    - am_adam
+    - am_michael
+    - am_eric
+    - am_onyx
+    - bf_emma
+    - bf_isabella
+    - bm_george
+    - bm_lewis
+  speed: {uniform: [1.0, 1.4]}
+
+# Left identical to mode1_matched.yaml on purpose: the two profiles exist to be
+# compared, and diverging here would confound every Mode 1 vs Mode 2 result.
+#
+# It is not free, though. Measured on 200 clips of identical cached TTS pushed
+# through each channel, WavLM KID against data/real/calibration:
+#
+#                          mode 2      mode 1 matched
+#   no voice augment       0.00257     0.00295
+#   + voice augment        0.00661     0.00405
+#
+# The cost is `pitch_semitones`, not `eq_tilt_db` as one might guess: dropping
+# pitch alone recovers 0.00661 -> 0.00304, dropping eq_tilt alone changes
+# nothing (0.00669), and dropping pitch+tempo returns to the un-augmented
+# 0.00257. Pitch shifting leaves resampling artifacts that WavLM's low layers
+# read easily, and it costs Mode 2 (2.6x) more than Mode 1 (1.4x) because a
+# better-matched channel masks less of them.
+#
+# Not changed here unilaterally: pitch variation buys speaker diversity for the
+# downstream ASR task, and that trade belongs to whoever owns Tier 3, not to a
+# channel profile. Flagged for P3.
+voice_augment:
+  pitch_semitones: {prob: 0.5, uniform: [-2, 2]}
+  tempo: {prob: 0.3, uniform: [0.95, 1.05]}
+  eq_tilt_db: {prob: 0.4, uniform: [-2, 2]}
+
+dataset:
+  noise_only_frac: 0.03
+  # Lower than Mode 1's 0.5. A relayed utterance goes through two fitted
+  # channels in series, so its band is limited twice and its statistics drift
+  # away from the single-receiver clips the presets were fitted to — which is
+  # also all the real reference set contains.
+  pilot_double_hop_prob: 0.25
+  category_quotas: {}
+
+calibrated:
+  calibration:
+    corpus_dir: reference-data-for-v1-run/updated_kixd_clips
+    presets: runs/channel_data_kixd/train/presets.jsonl
+    noise_bank: runs/channel_data_kixd/train/noise
+    # station_mix unset, and here it has nothing to weight: every KIXD clip
+    # parses to station KIXD_TOWER, so the mix is degenerate.
+    snr_jitter_db: {uniform: [-3, 3]}
+    # Dead on this calibration for the same reason — there is no second
+    # station's hiss to borrow. Left at the source profile's value rather than
+    # zeroed, so a later multi-station calibration behaves the same.
+    cross_station_prob: 0.1
+
+  residual:
+    # Flip to true once the KIXD FastCUT run has finished and written its
+    # selected checkpoint. Loading is strict (`_load_residual`): an enabled
+    # residual with missing weights fails the run rather than quietly emitting
+    # DSP-only clips labelled as translated.
+    enabled: false
+    # `residual_train.py --out runs/fastcut_kixd` writes G_latest.pt during
+    # training and then, at the end, stamps the step the lexicographic
+    # selection rule picked into both G_ema.pt and G_selected.pt. Point at the
+    # selected one: it is the only name that means "the checkpoint the rule
+    # chose" rather than "whatever EMA held last".
+    checkpoint: runs/fastcut_kixd/G_selected.pt
+    apply_prob: 0.5
+    alpha: 1.0             # scalar, or {uniform: [lo, hi]}, toward the DSP endpoint
+    # The S2 run trained at --residual-scale-max 0.20; this config-side 0.35 is
+    # the inherited default, not a measurement. It is a `mode2_safe` search knob
+    # (atcgen/rl/space.py) for exactly that reason.
+    residual_scale_max: 0.35
+
+  # Effects the fitted chain cannot produce, because they are events rather than
+  # stationary channel properties. Probabilities follow `mode1_matched.yaml`,
+  # which was tuned against these same clips, except `gated_floor_prob`.
+  #
+  # There is no `reapply_bandpass` knob here because this backend already does
+  # the equivalent, and did from the start: a preset's fitted FIR *is* the
+  # receiver's filter, squelch clicks are added through a unit-gain copy of it
+  # (`_band_limited`), and dropouts are ramped rather than rectangular. Mode 1's
+  # flag is how the procedural chain catches up (03 §4.3).
+  post_effects:
+    squelch:
+      prob: 0.8
+      # 04 §2.2 records a squelch-gated flag per harvested noise segment; 4.5%
+      # of the 155 segments in runs/calib_v1/noise are gated that hard. That
+      # measures how often the floor is *near digital silence*, not how often
+      # the gate acts at all — every clip's floor drops between transmissions,
+      # only some drop below -60 dBFS. So this is the split between a deep
+      # (-70..-55 dB) and an ordinary (-45..-25 dB) closed-gate floor, and the
+      # measured fraction sets it.
+      gated_floor_prob: 0.045
+    dropouts:
+      prob: 0.15
+    codec:
+      prob: 0.8
+      kind: mp3
+      quality: {uniform: [0.75, 0.95]}
+
+  expansion:
+    real_manifest: data/real/labeled/manifest.jsonl
+    target_total: 10000
+    category_quotas: {}
+    holdout_frac: 0.15
+
+qc:
+  enabled: true
+  max_retries: 3
+  asr_roundtrip: false

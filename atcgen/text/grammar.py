@@ -47,6 +47,10 @@ class Utterance:
     category: str = "routine"  # "routine" | "emergency" | "rare_vocab" | ...
     entities: list[Entity] = field(default_factory=list)
     display: str = ""          # "" means: same as the transcript
+    #: Scalar passthrough from an external text source, copied onto the
+    #: manifest row as top-level columns. `meta` is the grammar's own
+    #: provenance and stays out of the manifest; this is the caller's.
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass

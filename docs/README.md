@@ -16,3 +16,4 @@ for behavior and thresholds.
 - [cli-reference.md](cli-reference.md) — current command-line entry points and options.
 - [results.md](results.md) — evidence snapshot for 2026-08-25.
 - [known-issues.md](known-issues.md) — operational, measurement, and corpus caveats.
+- [data-licensing.md](data-licensing.md) — data provenance and license status.

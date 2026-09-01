@@ -30,6 +30,7 @@ import random
 import re
 import shutil
 import time
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -39,15 +40,24 @@ import yaml
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 from training.evaluate import build_report, pick_device
+from training.normalize import normalize_atc
 
 from ..config import load_config
 from ..dataset.build import build_dataset, load_manifest
-from ..dataset.real_atc import load_real_atc
+from ..dataset.real_atc import SOURCE_KEY, load_real_atc
 from ..text.sources import JsonlTextSource, make_text_source
 from .finetune_lite import finetune, prepare_features, transcribe
+from .stats import wer_counts
 from .types import RewardResult
 
 GEN_SEED = 20260824  # fixed generator seed forced onto every candidate config
+
+#: Dev slice the reward is measured on when a caller names none. `dev_corpus`
+#: also accepts a local `audio,text` CSV/JSONL manifest (see
+#: `atcgen.dataset.real_atc.load_local_corpus`), which is how a run targets our
+#: own transcribed receiver rather than a public corpus from elsewhere.
+DEFAULT_DEV_CORPUS = "jacktol/atc-dataset"
+DEFAULT_DEV_SPLIT = "train"
 
 
 def _slug(text: str) -> str:
@@ -121,7 +131,8 @@ class TrueRewardHarness:
 
     def __init__(self, work_dir: str | Path, *,
                 base_model: str = "openai/whisper-tiny.en",
-                dev_corpus: str = "jacktol/atc-dataset", dev_split: str = "train",
+                dev_corpus: str = DEFAULT_DEV_CORPUS,
+                dev_split: str = DEFAULT_DEV_SPLIT,
                 dev_indices: tuple[int, int] = (0, 200),
                 text_pool_size: int = 400, text_seed: int = 1234,
                 n_synth: int = 200, ft_steps: int = 300, ft_batch: int = 8,
@@ -150,6 +161,8 @@ class TrueRewardHarness:
 
         self._dev_refs: list[str] | None = None
         self._dev_categories: list[str | None] | None = None
+        self._dev_sources: list[str | None] | None = None
+        self._dev_paths: list[str] | None = None
         self._dev_features: list[dict] | None = None
         self._baseline_report: dict | None = None
 
@@ -170,7 +183,27 @@ class TrueRewardHarness:
             list(dataset["category"]) if "category" in dataset.column_names
             else [None] * len(dataset)
         )
+        self._dev_sources = (
+            [str(value) for value in dataset[SOURCE_KEY]]
+            if SOURCE_KEY in dataset.column_names else [None] * len(dataset)
+        )
+        # the clip each row came from, so a per-utterance dump can be joined
+        # back to capture time (KIXD filenames carry it) for clustered CIs
+        self._dev_paths = [
+            (row.get("path") if isinstance(row, Mapping) else None) or ""
+            for row in dataset["audio"]
+        ]
         self._dev_features = prepare_features(dataset, self.processor)
+
+        # A mixed dev manifest is usually written one source after another, so
+        # a contiguous `--dev-indices` slice shorter than the file selects one
+        # source and silently answers a narrower question than the run intended.
+        # Print the composition rather than guess at a fix.
+        if any(self._dev_sources):
+            counts = Counter(source or "unlabeled" for source in self._dev_sources)
+            print(f"[dev] {len(self._dev_refs)} rows from {self.dev_corpus}: "
+                  + ", ".join(f"{name} {count}" for name, count in sorted(counts.items())),
+                  flush=True)
 
     def _baseline_cache_path(self) -> Path:
         lo, hi = self.dev_indices
@@ -183,14 +216,27 @@ class TrueRewardHarness:
         self._ensure_dev()
         cache_path = self._baseline_cache_path()
         if cache_path.exists():
-            self._baseline_report = json.loads(cache_path.read_text())
-            return
+            cached = json.loads(cache_path.read_text())
+            # A baseline cached before `wer_bounded` existed cannot be compared
+            # against a bounded post-fine-tune number -- the difference would
+            # be two different metrics subtracted, and it would read as a large
+            # spurious gain. Treat it as a miss and recompute.
+            if "wer_bounded" in cached:
+                self._baseline_report = cached
+                return
+            print(f"[dev] baseline cache {cache_path.name} predates bounded WER; "
+                  "recomputing", flush=True)
 
         model = WhisperForConditionalGeneration.from_pretrained(self.base_model)
         model.config.forced_decoder_ids = None
         model.config.suppress_tokens = []
         model.to(self.device).eval()
-        report = self.evaluate_model(model)
+        hypotheses = self.transcribe_dev(model)
+        report = self.dev_report(hypotheses, self.base_model)
+        # the zero-shot rows sit beside the cached report: a paired comparison
+        # of a trial against the baseline needs both sides per utterance
+        self.write_dev_rows(cache_path.with_name(f"{cache_path.stem}_rows.jsonl"),
+                            hypotheses)
         del model
         self._release_device_memory()
 
@@ -203,14 +249,145 @@ class TrueRewardHarness:
         self._ensure_baseline()
         return self._baseline_report
 
+    def transcribe_dev(self, model) -> list[str]:
+        """Greedy hypotheses for `model` over the fixed dev set."""
+        self._ensure_dev()
+        return transcribe(model, self.processor, self._dev_features, self.device)
+
+    def dev_report(self, hypotheses: list[str], model_name: str | None = None) -> dict:
+        """Tier 3 report over already-decoded `hypotheses`.
+
+        Split out from `evaluate_model` so a caller that also wants the
+        per-utterance rows decodes once and scores once.  `by_source` is added
+        when the dev manifest declares a `source` column: a mixed dev set
+        (local rows beside public ones) can move in aggregate because one half
+        moved and the other did not, and the aggregate alone cannot say which.
+        """
+        self._ensure_dev()
+        dataset_name = (f"{self.dev_corpus}:{self.dev_split}"
+                        f"[{self.dev_indices[0]}:{self.dev_indices[1]}]")
+        report = build_report(self._dev_refs, hypotheses, self._dev_categories,
+                              model=model_name or self.base_model,
+                              dataset=dataset_name)
+        # `wer` stays the standard unbounded number; `wer_bounded` is what the
+        # reward is scored on, so both are on the record for every trial.
+        report["wer_bounded"] = self._bounded_wer(hypotheses)
+        by_source = self._by_source(hypotheses)
+        if by_source:
+            report["by_source"] = by_source
+        return report
+
     def evaluate_model(self, model) -> dict:
         """Tier 3 report for `model` on the fixed dev set."""
+        return self.dev_report(self.transcribe_dev(model),
+                               getattr(model, "name_or_path", self.base_model))
+
+    def _row_counts(self, hypotheses: list[str]) -> list[tuple[int, int]]:
+        """Per-utterance (errors, reference words), ATC-normalized.
+
+        `wer_counts` applies `normalize_atc` to reference and hypothesis
+        through the same call, which is the same normalization
+        `training.evaluate.build_report` uses for the aggregate -- so these
+        rows sum to that aggregate rather than to a second opinion of it.
+
+        Noise-only rows (empty reference) count as (0, 0) for the same reason
+        `_measures` drops them: every word of the hypothesis would be an
+        insertion against nothing, so including them would inflate the
+        numerator over a denominator they contribute nothing to. What the
+        model said there is scored separately, as the hallucination rate.
+        """
+        return [wer_counts(reference, hypothesis) if reference.strip() else (0, 0)
+                for reference, hypothesis in zip(self._dev_refs, hypotheses)]
+
+    def _bounded_wer(self, hypotheses: list[str]) -> dict:
+        """Corpus WER with each row's errors capped at its reference length.
+
+        An unbounded per-row WER has no upper limit: insertions are counted
+        against a denominator the row does not grow, so a single utterance can
+        contribute arbitrarily many errors.  whisper-tiny's repetition failure
+        mode does exactly that -- it emits the same phrase until it hits
+        `max_new_tokens`, and one 17-word row in the E0 run produced 96 errors,
+        outweighing the entire degraded-channel manipulation it was supposed to
+        be measuring.
+
+        Capping at 1.0 WER per row makes a looping row count as "this row was
+        completely wrong", which is all it can honestly mean, and no more.  The
+        alternative -- dropping the row -- discards a real failure and changes
+        the denominator between arms; this keeps every row and bounds its
+        influence.
+
+        This is the reward's aggregate only.  `write_dev_rows` keeps the raw
+        uncapped counts so a bootstrap can still see the loops, and
+        `report["wer"]` remains the standard unbounded number that every other
+        evaluation in the repo reports.
+        """
+        counts = self._row_counts(hypotheses)
+        capped = [(min(errors, words), words) for errors, words in counts]
+        errors = sum(row_errors for row_errors, _ in capped)
+        words = sum(row_words for _, row_words in capped)
+        return {
+            "atc_normalized": (errors / words) if words else None,
+            "errors": errors,
+            "reference_words": words,
+            "n_capped_rows": sum(1 for e, w in counts if e > w),
+            "discarded_errors": sum(e - w for e, w in counts if e > w),
+        }
+
+    def _by_source(self, hypotheses: list[str]) -> dict[str, dict]:
+        if not any(self._dev_sources):
+            return {}
+        counts = self._row_counts(hypotheses)
+        totals: dict[str, list[int]] = {}
+        for source, (errors, words) in zip(self._dev_sources, counts):
+            bucket = totals.setdefault(source or "unlabeled", [0, 0, 0, 0])
+            bucket[0] += errors
+            bucket[1] += words
+            bucket[2] += 1
+            bucket[3] += min(errors, words)
+        # both numbers per source: `wer` reconciles with `report["wer"]`,
+        # `wer_bounded` with the aggregate the reward is actually scored on
+        return {
+            name: {"samples": rows, "ref_words": words,
+                   "wer": (errors / words) if words else None,
+                   "wer_bounded": (bounded / words) if words else None}
+            for name, (errors, words, rows, bounded) in sorted(totals.items())
+        }
+
+    def write_dev_rows(self, path: str | Path, hypotheses: list[str]) -> Path:
+        """Dump one JSON object per dev utterance for offline analysis.
+
+        Carries the error and reference-word *counts*, not just the ratio: a
+        paired bootstrap over utterances (or clustered by capture day, which
+        the audio path encodes) has to resample the counts and re-divide, and
+        a per-row WER alone cannot be re-aggregated correctly.
+        """
         self._ensure_dev()
-        hypotheses = transcribe(model, self.processor, self._dev_features, self.device)
-        dataset_name = f"{self.dev_corpus}:{self.dev_split}[{self.dev_indices[0]}:{self.dev_indices[1]}]"
-        return build_report(self._dev_refs, hypotheses, self._dev_categories,
-                            model=getattr(model, "name_or_path", self.base_model),
-                            dataset=dataset_name)
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = [
+            {
+                "index": index,
+                "audio": self._dev_paths[index],
+                "source": self._dev_sources[index],
+                "reference": reference,
+                "hypothesis": hypothesis,
+                "errors": errors,
+                "ref_words": words,
+                "wer": (errors / words) if words else None,
+                # raw and uncapped on purpose (the reward's aggregate bounds
+                # them, a bootstrap over these rows should not): `capped` marks
+                # the rows the reward clipped, which is how you find the loops
+                "capped": errors > words,
+                # empty reference: excluded from WER, scored here instead
+                "hallucinated": (None if reference.strip()
+                                 else bool(normalize_atc(hypothesis).strip())),
+            }
+            for index, (reference, hypothesis, (errors, words)) in enumerate(
+                zip(self._dev_refs, hypotheses, self._row_counts(hypotheses)))
+        ]
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows),
+                        encoding="utf-8")
+        return path
 
     def _release_device_memory(self) -> None:
         if self.device.type == "mps":
@@ -222,7 +399,7 @@ class TrueRewardHarness:
 
     def __call__(self, config: Mapping[str, Any], trial_dir: str) -> RewardResult:
         self._ensure_baseline()
-        baseline_wer = self._baseline_report["wer"]["atc_normalized"]
+        baseline_wer = self._baseline_report["wer_bounded"]["atc_normalized"]
 
         trial = Path(trial_dir)
         start = time.monotonic()
@@ -235,10 +412,13 @@ class TrueRewardHarness:
         synth_dir = trial / "synth"
 
         start = time.monotonic()
-        report = self.evaluate_model(model)
+        hypotheses = self.transcribe_dev(model)
+        report = self.dev_report(hypotheses,
+                                 getattr(model, "name_or_path", self.base_model))
+        self.write_dev_rows(trial / "dev_rows.jsonl", hypotheses)
         eval_seconds = time.monotonic() - start
 
-        post_wer = report["wer"]["atc_normalized"]
+        post_wer = report["wer_bounded"]["atc_normalized"]
         loss_curve_tail = list(getattr(model, "_ft_losses", []))[-10:]
 
         del model
@@ -255,6 +435,11 @@ class TrueRewardHarness:
             proxy=False,
             metrics={
                 "raw_wer_after": report["wer"]["raw"],
+                # the unbounded aggregate the reward is *not* scored on, kept
+                # alongside so a loop-driven divergence is visible per trial
+                "unbounded_wer_after": report["wer"]["atc_normalized"],
+                "n_capped_rows": report["wer_bounded"]["n_capped_rows"],
+                "by_source": report.get("by_source"),
                 "n_synth": self.n_synth,
                 "n_dev": len(self._dev_refs),
                 "ft_seconds": round(ft_seconds, 3),

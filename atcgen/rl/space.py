@@ -30,7 +30,7 @@ from typing import Any
 
 import numpy as np
 
-_KINDS = {"linear", "log", "prob"}
+_KINDS = {"linear", "log", "prob", "choice"}
 
 # Which entries of a distribution payload are the (lower, upper) bounds pair.
 # ``beta_scaled`` is [alpha, beta, low, high]; ``uniform`` is [low, high].
@@ -42,8 +42,12 @@ class Knob:
     """One search dimension: a unit value in [0,1] mapped onto ``[lo, hi]``.
 
     ``kind`` selects the mapping: ``linear`` interpolates, ``log`` interpolates
-    geometrically (both bounds must be positive), and ``prob`` is linear but
-    marks the target as a probability so logs and clamps can treat it as one.
+    geometrically (both bounds must be positive), ``prob`` is linear but marks
+    the target as a probability so logs and clamps can treat it as one, and
+    ``choice`` snaps the cube coordinate onto one of ``values`` -- a
+    categorical arm rather than a continuous range, for a knob whose
+    interesting settings are "off" and "what the profile already says" with
+    nothing meaningful in between.
 
     ``apply`` writes the concrete value into a config mapping; ``read`` pulls
     the current value back out for ``SearchSpace.default_vector`` and returns
@@ -56,10 +60,17 @@ class Knob:
     kind: str
     apply: Callable[[dict, float], None]
     read: Callable[[Mapping[str, Any]], float | None] | None = None
+    values: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in _KINDS:
             raise ValueError(f"knob {self.name}: kind must be one of {sorted(_KINDS)}")
+        if self.kind == "choice":
+            if self.values is None or len(set(self.values)) < 2:
+                raise ValueError(
+                    f"knob {self.name}: choice knobs need two or more distinct values")
+        elif self.values is not None:
+            raise ValueError(f"knob {self.name}: values is only for choice knobs")
         if self.hi <= self.lo:
             raise ValueError(f"knob {self.name}: hi must exceed lo")
         if self.kind == "log" and self.lo <= 0:
@@ -68,6 +79,9 @@ class Knob:
     def value(self, unit: float) -> float:
         """Concrete value for a unit-cube coordinate (clipped into [0,1])."""
         unit = min(1.0, max(0.0, float(unit)))
+        if self.kind == "choice":
+            index = min(int(unit * len(self.values)), len(self.values) - 1)
+            return float(self.values[index])
         if self.kind == "log":
             return float(self.lo * (self.hi / self.lo) ** unit)
         return float(self.lo + unit * (self.hi - self.lo))
@@ -75,6 +89,12 @@ class Knob:
     def unit(self, value: float) -> float:
         """Inverse of :meth:`value`, clipped so out-of-range bases still map in."""
         value = float(value)
+        if self.kind == "choice":
+            # the centre of the winning cell, so `default_vector` lands on the
+            # arm the profile already sets rather than on a cell boundary
+            index = min(range(len(self.values)),
+                        key=lambda i: abs(self.values[i] - value))
+            return (index + 0.5) / len(self.values)
         if self.kind == "log":
             if value <= 0:
                 return 0.0
@@ -212,8 +232,8 @@ def dist_bound_knob(
     return Knob(name, lo, hi, kind, apply, _reader(get))
 
 
-def dist_prob_knob(name: str, path: str, lo: float = 0.0, hi: float = 1.0) -> Knob:
-    """Knob over the ``prob`` gate of a distribution mapping at a dotted path."""
+def _dist_prob_accessors(path: str):
+    """The (apply, read) pair for a distribution's ``prob`` gate at ``path``."""
 
     def apply(config: dict, value: float) -> None:
         parent, leaf = _walk(config, path)
@@ -227,7 +247,25 @@ def dist_prob_knob(name: str, path: str, lo: float = 0.0, hi: float = 1.0) -> Kn
         spec = parent.get(leaf)
         return spec.get("prob", 1.0) if isinstance(spec, Mapping) else None
 
-    return Knob(name, lo, hi, "prob", apply, _reader(get))
+    return apply, _reader(get)
+
+
+def dist_prob_knob(name: str, path: str, lo: float = 0.0, hi: float = 1.0) -> Knob:
+    """Knob over the ``prob`` gate of a distribution mapping at a dotted path."""
+    apply, read = _dist_prob_accessors(path)
+    return Knob(name, lo, hi, "prob", apply, read)
+
+
+def dist_prob_choice_knob(name: str, path: str, values: Sequence[float]) -> Knob:
+    """Categorical knob over a distribution's ``prob`` gate: one of ``values``.
+
+    For a gate whose interesting settings are a short list rather than a range
+    — "off" against "whatever the profile says" — where a continuous sweep
+    would spend the budget resolving a difference the reward cannot see.
+    """
+    apply, read = _dist_prob_accessors(path)
+    values = tuple(float(value) for value in values)
+    return Knob(name, min(values), max(values), "choice", apply, read, values)
 
 
 def chain_prob_knob(name: str, primitive: str, lo: float = 0.0, hi: float = 1.0) -> Knob:
@@ -422,3 +460,175 @@ def default_atc_space() -> SearchSpace:
         scalar_knob("channel.clean_arm_prob", "channel.clean_arm_prob", 0.0, 0.10,
                     kind="prob"),
     ])
+
+
+#: The `voice_augment.pitch_semitones` gate the shipped profiles carry, and the
+#: fallback arm for `talker_only_space` when a base profile does not declare one.
+DEFAULT_PITCH_PROB = 0.5
+
+
+def mode2_safe_space(base: Mapping[str, Any] | None = None) -> SearchSpace:
+    """The full curated space for a Mode 2 (`calibrated`) profile.
+
+    ``default_atc_space`` is Mode 1 only: twelve of its knobs address
+    ``channel.chain`` steps and a thirteenth ``channel.clean_arm_prob``, none of
+    which a calibrated profile has, so resolving it against one raises before
+    a single clip is rendered.  Every knob here resolves *and* renders on a
+    Mode 2 config; ``tests/test_rl_space.py`` proves that by rendering from
+    sampled vectors rather than by asserting the paths exist.
+
+    Fifteen dimensions is too many for a twenty-five-trial budget -- use
+    ``talker_only_space`` for a short run.  This space is for a search with
+    room to move, against calibration artifacts that have actually been fitted:
+    the residual knobs below are inert while ``calibrated.residual.enabled`` is
+    false, and reading them as dead dimensions is the expected outcome, not a
+    bug.
+
+    The band shape, drive, AGC and noise floor are not knobs at all in this
+    mode -- they are one real receiver's *measured* values, drawn per utterance
+    out of the preset pool, and re-deriving them from a search would throw away
+    the thing that makes Mode 2 Mode 2.  What is left to search is the three
+    places the profile still guesses:
+
+    *   **How far the drawn SNR may wander from the measured one**
+        (``snr_jitter_db``).  This is the one lever over the fitted channel,
+        and it is the Mode 2 analogue of Mode 1's ``additive_noise.snr_*``
+        pair: how much of the batch is genuinely hard.
+    *   **The receiving station's event artifacts** -- squelch, dropouts, the
+        delivery codec.  A preset cannot produce these (they are events, not
+        stationary channel properties), so ``post_effects`` declares them at
+        probabilities copied from ``mode1_matched.yaml`` rather than fitted.
+    *   **The learned residual's dose** -- how often it fires and how far it
+        may move the waveform.  Both are policy, not measurement: the FastCUT
+        S2 run trained at ``--residual-scale-max 0.20`` while the config-side
+        default is 0.35, and ``apply_prob`` deliberately keeps a pure-DSP
+        share in every corpus (04 §2.4).
+
+    Plus the four talker and two batch-composition knobs that are
+    backend-agnostic and already work in both modes.
+
+    Not searched: ``cross_station_prob``, which is a no-op on a single-station
+    calibration such as KIXD (there is no other station's hiss to borrow), and
+    ``station_mix``, which is a mapping rather than a scalar.
+    """
+    return SearchSpace([
+        # -- the fitted channel's one degree of freedom ---------------------
+        # Added to each preset's own measured `snr_est`; the two edges are
+        # searched separately for the same reason Mode 1's SNR beta's are.
+        dist_bound_knob("calibration.snr_jitter_lo",
+                        "calibrated.calibration.snr_jitter_db", 0, -9.0, -1.0),
+        dist_bound_knob("calibration.snr_jitter_hi",
+                        "calibrated.calibration.snr_jitter_db", 1, 1.0, 9.0),
+
+        # -- receiving-station artifacts (the post-effects block) -----------
+        scalar_knob("post_effects.squelch.prob",
+                    "calibrated.post_effects.squelch.prob", 0.3, 1.0, kind="prob"),
+        # The measured gated fraction is 0.045; the range brackets it rather
+        # than reaching for the physically defensible extreme.
+        scalar_knob("post_effects.squelch.gated_floor_prob",
+                    "calibrated.post_effects.squelch.gated_floor_prob",
+                    0.0, 0.20, kind="prob"),
+        scalar_knob("post_effects.dropouts.prob",
+                    "calibrated.post_effects.dropouts.prob", 0.0, 0.40, kind="prob"),
+        scalar_knob("post_effects.codec.prob",
+                    "calibrated.post_effects.codec.prob", 0.3, 1.0, kind="prob"),
+        # libsndfile's compression_level runs 0 (best) to 1 (worst): the
+        # profile's [0.75, 0.95] is roughly 32 down to 16 kbps, and lowering
+        # the clean edge is what lets the search buy a cleaner delivery.
+        dist_bound_knob("post_effects.codec.quality_lo",
+                        "calibrated.post_effects.codec.quality", 0, 0.50, 0.85),
+
+        # -- learned residual dose ------------------------------------------
+        scalar_knob("residual.apply_prob", "calibrated.residual.apply_prob",
+                    0.0, 1.0, kind="prob"),
+        scalar_knob("residual.scale_max",
+                    "calibrated.residual.residual_scale_max", 0.05, 0.35),
+
+        # -- talker (backend-agnostic) --------------------------------------
+        *tts_speed_knobs(),
+        dist_prob_knob("voice_augment.pitch_prob", "voice_augment.pitch_semitones",
+                       0.0, 0.8),
+        dist_prob_knob("voice_augment.tempo_prob", "voice_augment.tempo", 0.0, 0.8),
+
+        # -- batch composition (backend-agnostic) ---------------------------
+        scalar_knob("dataset.noise_only_frac", "dataset.noise_only_frac", 0.0, 0.10,
+                    kind="prob"),
+        scalar_knob("dataset.pilot_double_hop_prob", "dataset.pilot_double_hop_prob",
+                    0.0, 0.8, kind="prob"),
+    ])
+
+
+def talker_only_space(base: Mapping[str, Any] | None = None) -> SearchSpace:
+    """Four talker knobs that resolve and render on *either* generator mode.
+
+    The space for a short run.  A cross-entropy method over fifteen dimensions
+    needs far more than the twenty-five trials a night of seven-minute
+    evaluations buys; four dimensions it can actually move.  Nothing here
+    touches a channel backend, so it is valid against a procedural profile and
+    a calibrated one alike -- which is also what lets the same knobs be read
+    against tonight's Mode 1 base and tomorrow's calibrated one.
+
+    **The omissions are the argument**, and they are about *when* a knob is
+    worth searching, not whether it matters:
+
+    *   **Calibrated and residual knobs get re-derived at calibration.**
+        Searching a residual's ``apply_prob`` and ``residual_scale_max``
+        against an *untrained* residual measures nothing -- the config fields
+        exist, but ``calibrated.residual.enabled`` is false, so the reward
+        cannot see them and the optimizer spends its budget on dead
+        dimensions.  ``mode2_safe_space`` carries them for the run that
+        happens after the artifacts are fitted.
+    *   **The batch-composition knobs are cheap to set and expensive to
+        search.**  ``noise_only_frac`` and ``pilot_double_hop_prob`` change
+        what fraction of the batch is which kind of row; at a few hundred
+        clips per trial the reward's resolution is well above the difference
+        they make.
+
+    What is left is the talker.  Rate is the one talker-side control that
+    reliably moves ASR error, and the two speed edges do different jobs -- the
+    slow edge sets how much easy audio the fine-tune sees, the fast edge how
+    much of the hard tail.
+
+    ``voice_augment.pitch_prob`` is a **categorical arm**, not a range:
+    ``{0.0, the base profile's own value}``.  The open question about pitch is
+    whether to do it at all -- ``configs/mode2_fastcut.yaml``'s header records
+    that pitch shifting costs Mode 2 a 2.6x WavLM KID regression through
+    resampling artifacts, while it is also what buys speaker diversity for the
+    downstream task.  That is an on/off decision the reward can answer in a
+    handful of trials; sweeping it continuously would spend the budget
+    resolving intermediate settings nobody would ship.
+
+    Pass ``base`` to anchor that second arm on the profile actually being
+    searched; without it the arm is ``DEFAULT_PITCH_PROB``.
+    """
+    pitch_prob = DEFAULT_PITCH_PROB
+    if base is not None:
+        current = dist_prob_knob("probe", "voice_augment.pitch_semitones").read(base)
+        if current is not None and current > 0.0:
+            pitch_prob = float(current)
+
+    return SearchSpace([
+        *tts_speed_knobs(),
+        dist_prob_knob("voice_augment.tempo_prob", "voice_augment.tempo", 0.0, 0.8),
+        dist_prob_choice_knob("voice_augment.pitch_prob",
+                              "voice_augment.pitch_semitones", (0.0, pitch_prob)),
+    ])
+
+
+#: `--space` choices for `scripts/rl_loop.py`, name -> constructor. Every
+#: constructor takes the base profile so a space may anchor a knob on it.
+SPACES = {
+    "default": lambda base=None: default_atc_space(),
+    "mode2_safe": mode2_safe_space,
+    "talker_only": talker_only_space,
+}
+
+#: Generator modes each space can search. `talker_only` is mode-agnostic (it
+#: touches only TTS and voice augment); `default` addresses `channel.chain` and
+#: `mode2_safe` addresses `calibrated.*`, so each is confined to its own mode.
+SPACE_MODES = {
+    "default": {"procedural"},
+    "mode2_safe": {"calibrated"},
+    "talker_only": {"procedural", "calibrated"},
+}
+

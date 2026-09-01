@@ -6,13 +6,22 @@ conventions and real-corpus conventions score comparably.
 
 import re
 
+#: Radio spellings folded onto one form. Every value must be a *fixed point*
+#: of `normalize_atc` itself, or the fold defeats its own purpose: folding runs
+#: after the hyphen and punctuation passes, so a value carrying punctuation is
+#: emitted verbatim and can never equal the normalization of the spelling it
+#: was meant to match. `xray -> x-ray` had exactly that bug -- "x-ray" in a
+#: reference normalized to "x ray" (two tokens, hyphen already replaced) while
+#: "xray" in a hypothesis normalized to the single token "x-ray", so the two
+#: spellings of the same word scored as errors against each other. It reads as
+#: 11 of the 200 rows in the KIXD RL dev slice.
 FOLD = {
     "niner": "nine",
     "tree": "three",
     "fife": "five",
     "fower": "four",
     "juliett": "juliet",
-    "xray": "x-ray",
+    "xray": "x ray",
     "okay": "ok",
 }
 

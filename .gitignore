@@ -7,3 +7,4 @@ runs/
 *.egg-info/
 .DS_Store
 reports/
+reference-data-for-v1-run/

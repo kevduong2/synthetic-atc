@@ -181,3 +181,134 @@ minimum detectable effect.
 > itself is one seed; a 3-seed A4 replication would be needed for a fair
 > seed-mean contrast. Confirmatory claims await a prospectively collected
 > session-disjoint test.
+
+## Overnight KIXD calibration + talker-knob session (2026-09-01)
+
+The new real corpus contains 7,374 KIXD_TOWER clips from 2025-08-01 through
+2025-08-08: 15.2 hours of 16 kHz mono audio. A rename-log join against ASR
+V2.1.2 recovered 6,502 clean human transcripts. The day-disjoint reward split
+uses 5,392 rows from days 1--6 for training and 200 rows from day 7 for
+development. `data/real/kixd/kixd_locked_day.csv`, day 20250808 with 337 rows,
+was deliberately never read. The decision retained `base`, so there was no
+selection event; that day remains reserved for the final trained model.
+
+The KIXD calibration chain produced 400 presets and 15,302 noise-bed segments,
+76% of which passed the gate, using capture-block folds. Probe TTS required a
+16 kHz resample; the correction and frozen workflow are recorded in
+`docs/runbook-v1-3080.md`. Split and preset evidence is under
+`runs/channel_data_kixd/`.
+
+The reward is the `openai/whisper-tiny.en` fine-tune delta on KIXD development
+data, using bounded per-row WER: each row's errors are capped at its reference
+word count. This replaced unbounded WER after one looping row outweighed an
+entire channel manipulation. Fine-tuning itself moved WER from about 0.75 to
+about 0.50; the knobs below are second-order effects.
+
+### Talker partition
+
+The zero-shot bounded-WER baseline was 0.7334. There were four paired seeds per
+talker arm versus `base`, except for the deliberately two-seed degraded arm.
+Positive paired delta means that the arm hurts.
+
+| Arm | Mean reward | SD | Paired delta vs base | Paired t | Direction |
+|---|---:|---:|---:|---:|---:|
+| `base` | +0.2217 | 0.0228 | — | — | — |
+| `aug_off` | +0.1935 | 0.0143 | +0.0283 | 2.90 | 4/4 |
+| `speed_fixed` | +0.2028 | 0.0227 | +0.0190 | 1.48 | 3/4 |
+| `pitch_off` | +0.2025 | 0.0185 | +0.0192 | 1.76 | 3/4 |
+| `voiceaug_off` | +0.2114 | 0.0031 | +0.0103 | 0.80 | 3/4 |
+| `degraded` (2 seeds) | +0.2299 | 0.0129 | +0.0022 | 0.10 | 1/2 |
+
+The four-seed t values have 3 degrees of freedom. The `aug_off` result puts the
+combined talker-augmentation effect near 2.8 WER points, with all four paired
+seeds in the same direction. The two-seed degraded null says this reward is
+blind to channel quality at the 200-clip, 300-fine-tune-step, 200-row
+development budget; channel choices therefore remain governed by KID and LTAS,
+not a WER search.
+
+The decomposition is almost exactly additive: `speed_fixed` +
+`voiceaug_off` is +0.0293 versus +0.0283 for `aug_off`, a +0.0010 residual.
+No individual component is separable at this budget; the component contrasts
+are within approximately one standard error. The impossible ordering in which
+`voiceaug_off` is cheaper than its own `pitch_off` subset is itself evidence
+that the sub-effects are below the noise floor.
+
+Talker augmentation therefore stays on at the baseline values: speed
+`[1.0, 1.4]`, pitch probability 0.5, tempo probability 0.3, and EQ-tilt
+probability 0.4. “Pitch off for the 2.6x KID gain” is rejected: the powered
+follow-up (base and `pitch_off` extended to **10 paired seeds** after the
+freeze, same harness) puts removing pitch at **+0.0089 bounded reward
+(≈0.9 WER points), t=1.61 on 9 df, 8/10 seeds harmful, 95% CI −0.35 to
++2.1 points**. Not individually significant, but directionally consistent and
+nowhere near "free"; with downstream WER as the product metric, pitch stays.
+The KID-vs-WER tension is real and recorded — revisiting it requires a larger
+dev slice, not more seeds.
+
+`runs/power_check_kixd/summary.json` is mixed-metric: seeds 0--1 are unbounded
+and later seeds are bounded. The table above instead comes from
+`scripts/analysis/rescore_bounded.py` and
+`scripts/analysis/paired_report.py`, recomputed on the
+bounded metric from the 22 per-cell
+`runs/power_check_kixd/trials/*/dev_rows.jsonl` files.
+
+### KIXD fidelity and FastCUT smoke
+
+Real KIXD LTAS peaked at 469 Hz and fell about 6 dB/octave from 1--3 kHz,
+reproducing the research measurement within 2 dB. Mode 2's calibrated 1--3 kHz
+LTAS gap was 1.4 dB, inside that measurement floor, so no shelf correction was
+needed; mode 1's gap was 3.2 dB with a 200 Hz bulge. Both modes retained a
+13--24 dB excess at 4 kHz, and mode 2 was 13.5 dB hot at 100 Hz. These are
+post-calibration checks for the full run, not evidence that the residual model
+will close them. The measurements are in
+`runs/e1_artifacts/ltas_e1.json` and
+`runs/e1_artifacts/ltas_mode1.json`; rendered Mode 2 is under
+`runs/e1_mode2_kixd/`.
+
+Reference clips contained 18.8% exact-zero samples and were 9 dB colder, a
+padding/level confound in raw KID. Energy trimming and RMS matching on both
+sides reduced KID by 35--42%. Matched KID was 0.00334 for mode 1 and 0.00299
+for mode 2: mode 2 was ahead by about one standard deviation, consistent with
+LTAS. Only matched KID is quoted as the fidelity metric from this point. The
+evidence is in the session tmp directory's `kid2x2_mode1_matched.json` and
+`kid2x2_mode2_matched.json`, produced by `make_matched_sets.py` in that same
+directory.
+
+The 300-step KIXD FastCUT smoke passed all 8 gates, wrote `G_selected.pt`, and
+computed fold-KID at 0.64 steps/s under contention. This is an end-to-end input
+validation, not a quality claim; its evidence is
+`runs/fastcut_kixd_smoke/summary.json` and `validation_report.json`.
+
+### Infrastructure and frozen production recipe
+
+The session landed local CSV/JSONL development-corpus routing for the reward
+harness and `rl_verify`, per-source WER and per-row dumps, bounded WER with
+stale-cache invalidation, `talker_only`/`mode2_safe`/`default` search spaces
+with CLI mode guards, and the normalizer x-ray fold fix. It also added
+`SequentialTextSource` and `expand_text_views` for a 155,776-item paired
+two-view schedule, plus 4,800 noise-only clips; the scene converter covers
+77,888 utterances across six airports. The V2.1.2-schema CSV exporter supports
+multi-run merge, keeps noise out of test, accepts `--set` overrides, and uses
+1,024-sample length quantization. The suite had 761+ passing tests.
+
+The v1 production recipe is Mode 2 calibrated plus a FastCUT residual using
+source+identity NCE, a 0.20 scale cap, lexicographic selection, and
+`G_selected.pt`, to be recalibrated on the full multi-airport set. Text is
+rendered sequentially without replacement under the two-view policy. ASR
+training uses a 50--75% real mix followed by a short real-only tail, never
+synthetic-only. Licensing status is in `docs/data-licensing.md`; the complete
+frozen procedure is in `docs/runbook-v1-3080.md`.
+
+### Claim discipline
+
+> Development and feasibility evidence only. The paired talker experiment
+> supports retaining the complete baseline augmentation bundle, but does not
+> identify a winning individual knob. The degraded null does not establish
+> channel equivalence; it establishes that this WER reward and budget cannot
+> select channel settings. Mode 2's LTAS and matched-KID advantage is a
+> development fidelity result, and the FastCUT run is only a smoke test.
+> Confirmatory model claims await the final trained model's single read of the
+> untouched `kixd_locked_day`.
+
+Primary run artifacts are `runs/power_check_kixd/` (22 cells),
+`runs/e1_mode2_kixd/`, `runs/fastcut_kixd_smoke/`, and
+`runs/channel_data_kixd/`.

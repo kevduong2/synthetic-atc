@@ -54,6 +54,14 @@ from ..tts.augment import VoiceAugment
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "mode1_default.yaml"
 NOISE_ONLY_SEC = (2.0, 6.0)          # duration range of the noise-only samples
 NOISE_ONLY_BED_RMS = 0.03            # the bed the channel shapes when nobody speaks
+
+#: Every clip is written as a whole number of these frames.  The real KIXD
+#: capture is segmented on a 1024-sample grid -- all 400 clips in an audited
+#: sample are exact multiples -- so an unquantized generated set differs from
+#: it in a way that has nothing to do with the channel.  Length modulo 1024 is
+#: a free label for "synthetic", and both the WavLM/KID fidelity metric and any
+#: discriminator will read it before they read anything acoustic.
+FRAME_QUANTUM = 1024
 DURATION_EDGES = list(range(0, 32, 2))
 SNR_EDGES = list(range(-5, 45, 5))
 
@@ -106,6 +114,7 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
     if text_source is None or isinstance(text_source, str):
         text_source = make_text_source(text_source or "grammar")
     sampler = WeightedSampler.for_source(text_source, config.dataset.category_quotas)
+    _check_supply(text_source, n_samples)
     if tts is None:
         from ..tts import KokoroTTS
         tts = KokoroTTS(voices=config.tts.voices)
@@ -157,6 +166,10 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
                 gen["qc"] = {"ok": result.ok, "reason": result.reason,
                              "attempts": attempts}
             record = {
+                # the text source's own passthrough columns first, so a stray
+                # key can never displace one the builder owns (`sources.py`
+                # rejects the collision when the file is read)
+                **(utterance.extra if utterance else {}),
                 "audio": relative,
                 "text": utterance.transcript if utterance else "",
                 # "" on an Utterance means "the display form is the transcript"
@@ -176,6 +189,23 @@ def build_dataset(config: GeneratorConfig, out_dir: str | Path, n_samples: int,
     stats = _stats(config, rows, sampler, tally, kept_with_flag, resolved_hash)
     (out / "stats.json").write_text(json.dumps(stats, indent=2))
     return manifest_path
+
+
+def _check_supply(text_source: TextSource, n_samples: int) -> None:
+    """Refuse up front when a finite source cannot cover the requested run.
+
+    Only sequential sources declare `remaining`; a sampling source has no
+    ceiling. The check is conservative -- noise-only samples draw no text, so a
+    run that trips it might in fact have squeaked through -- and that is the
+    intent: exhausting the schedule 90,000 clips into a 10-hour render is a
+    much worse failure than being told to shorten the run before it starts.
+    """
+    remaining = getattr(text_source, "remaining", None)
+    if remaining is not None and n_samples > remaining:
+        raise ValueError(
+            f"sequential text source supplies {remaining} utterances, fewer than "
+            f"the {n_samples} samples requested; a sequential source is a "
+            f"schedule and does not repeat -- shorten the run or expand the file")
 
 
 def _source_spec(text_source: TextSource | str | None) -> str:
@@ -278,6 +308,7 @@ def _render(config: GeneratorConfig, tts, voice_augment: VoiceAugment, backend,
         wav, record = backend(clean, tts.sample_rate, rng, meta,
                               interference=interference, hops=hops)
         gen = {"voice": voice, "speed": round(speed, 3)}
+    wav = _quantize_length(wav)
     # drawn in both modes so the two share an RNG stream and `rms` runs are
     # bit-identical to what they were before `lufs` existed
     wav = _post(wav, config.output.loudness_db.sample(rng), sr, config.output)
@@ -319,6 +350,35 @@ def _synthesize(tts, text: str, rng: random.Random, voice: str,
         finally:
             tts.voices, tts.speed_range = pools
     return tts.synthesize(text, rng)
+
+
+def _quantize_length(wav: np.ndarray, quantum: int = FRAME_QUANTUM) -> np.ndarray:
+    """Extend `wav` to a whole number of `quantum` frames, never truncating.
+
+    Truncating is not an option: the last frame of a transmission is speech
+    often enough that trimming up to 64 ms off the end would cost real words.
+    So the clip is only ever lengthened, by at most ``quantum - 1`` samples.
+
+    The pad is a *reflection of the clip's own tail*, not zeros.  Both channel
+    backends frame their output with ``PAD_SEC`` of silence pushed through the
+    full chain, so those trailing samples already carry this receiver's noise
+    floor, its closed-squelch level and its codec artifacts -- exactly what the
+    extra samples should contain.  Zeros would stamp a run of digital silence
+    on the end of every clip, which is its own giveaway and a worse one than
+    the length was.  Reflecting rather than repeating keeps the waveform
+    continuous across the seam.
+
+    This runs after the channel and before the loudness stage, so the pad gets
+    the same treatment as the rest of the clip and the level statistics in the
+    manifest describe what is actually on disk.
+    """
+    x = np.asarray(wav, dtype=np.float32)
+    short = (-len(x)) % quantum
+    if short == 0:
+        return x
+    if len(x) < short + 1:      # degenerate; nothing to reflect
+        return np.pad(x, (0, short), mode="constant").astype(np.float32)
+    return np.pad(x, (0, short), mode="reflect").astype(np.float32)
 
 
 def _post(wav: np.ndarray, loudness_db: float | None, sr: int,
@@ -417,5 +477,13 @@ def load_manifest(manifest_path: str | Path):
         record["audio"] = str(root / record["audio"])
         for column in NON_TRAINING_COLUMNS:
             record.pop(column, None)
+    # A text source's passthrough columns are absent from noise-only rows, and
+    # `Dataset.from_list` takes its schema from the first record -- so whether
+    # `base_id` survives the load would otherwise depend on whether row 0
+    # happened to be noise. Fill the union explicitly.
+    columns = {key for record in records for key in record}
+    for record in records:
+        for missing in columns - record.keys():
+            record[missing] = None
     ds = Dataset.from_list(records)
     return ds.cast_column("audio", Audio(sampling_rate=TARGET_SR))

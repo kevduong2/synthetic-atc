@@ -50,6 +50,7 @@ architecture overview is in [docs/architecture.md](docs/architecture.md),
 with the illustrated version in [the systems manual](docs/systems-manual.html).
 Use [docs/cli-reference.md](docs/cli-reference.md) for commands and
 [docs/results.md](docs/results.md) for the current evidence snapshot.
+[Data provenance and license status](docs/data-licensing.md) covers every real-audio and text source used or considered by the project.
 
 ## Quickstart
 

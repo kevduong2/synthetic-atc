@@ -6,12 +6,19 @@ plumbing is tested by monkeypatching the heavy calls (`build_dataset`,
 `load_manifest`, `finetune`, `transcribe`) so the test only checks
 orchestration: the text pool is written once, the baseline WER is cached to
 disk and reused, and the reward sign follows the stubbed WERs.
+
+The local dev-corpus loader is tested against a hand-built HF dataset rather
+than a downloaded one: `load_real_atc`'s Hugging Face branch is three calls
+(`load_dataset`, an optional `transcription` rename, the `Audio` cast) and
+reproducing those over the same clips is what makes "parity" checkable
+offline.
 """
 
 import json
 
 import numpy as np
 import pytest
+import soundfile as sf
 import torch
 import yaml
 from transformers import (
@@ -20,13 +27,28 @@ from transformers import (
     WhisperProcessor,
 )
 
+from atcgen.dataset.real_atc import (
+    REAL_SR,
+    is_local_corpus,
+    load_local_corpus,
+    load_real_atc,
+)
 from atcgen.rl import reward as reward_mod
 from atcgen.rl.finetune_lite import finetune, transcribe
 from atcgen.rl.reward import TrueRewardHarness
 from atcgen.rl.types import RewardResult
+from training.normalize import normalize_atc
 
 MODEL_ID = "openai/whisper-tiny.en"
 VOCAB = 200
+
+#: Mixed case, digits and punctuation: everything `normalize_atc` folds away.
+#: The loader must not fold any of it -- see `test_local_text_is_not_normalized`.
+DEV_TEXTS = [
+    "Cleared to land, runway 18.",
+    "N123AB hold short RWY 36",
+    "",  # a noise-only row: kept, and what the hallucination rate scores
+]
 
 
 def _tiny_config(vocab_size: int = VOCAB) -> WhisperConfig:
@@ -74,6 +96,331 @@ def _processor_cached() -> bool:
         return True
     except Exception:  # noqa: BLE001 - any load failure means "not cached"
         return False
+
+
+# -- local dev corpus ------------------------------------------------------
+
+def _sine(path, seconds=0.5, sr=REAL_SR, freq=220.0):
+    t = np.arange(int(sr * seconds)) / sr
+    sf.write(path, (0.3 * np.sin(2 * np.pi * freq * t)).astype(np.float32), sr)
+    return path
+
+
+@pytest.fixture
+def dev_corpus(tmp_path):
+    """Three tiny wavs plus a CSV and a JSONL manifest naming them.
+
+    The third clip is written at 8 kHz so the 16 kHz cast has something to do;
+    the second manifest row is relative, so path resolution is exercised too.
+    """
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    paths = [
+        _sine(clips / "a.wav", freq=220.0),
+        _sine(clips / "b.wav", freq=330.0),
+        _sine(clips / "c.wav", sr=8000, freq=440.0),
+    ]
+    named = [str(paths[0]), "clips/b.wav", str(paths[2])]  # row 1 is relative
+
+    csv_path = tmp_path / "dev.csv"
+    csv_path.write_text(
+        "audio,text\n" + "".join(
+            f'{name},"{text}"\n' for name, text in zip(named, DEV_TEXTS)),
+        encoding="utf-8")
+
+    jsonl_path = tmp_path / "dev.jsonl"
+    jsonl_path.write_text(
+        "".join(json.dumps({"audio": name, "text": text}) + "\n"
+                for name, text in zip(named, DEV_TEXTS)),
+        encoding="utf-8")
+    return csv_path, jsonl_path, paths
+
+
+def _hf_style(paths, texts):
+    """What `load_real_atc` returns for an HF corpus, built without a download.
+
+    Same three operations in the same order: a dataset with `transcription`,
+    the rename to `text`, the cast to 16 kHz `Audio`.
+    """
+    from datasets import Audio, Dataset
+
+    ds = Dataset.from_dict({"audio": [str(path) for path in paths],
+                            "transcription": list(texts)})
+    ds = ds.rename_column("transcription", "text")
+    return ds.cast_column("audio", Audio(sampling_rate=REAL_SR))
+
+
+def test_local_corpus_is_detected_by_suffix(tmp_path):
+    assert is_local_corpus(tmp_path / "kixd_dev.csv")
+    assert is_local_corpus("data/real/kixd/kixd_dev.jsonl")
+    assert not is_local_corpus("jacktol/atc-dataset")
+    assert not is_local_corpus("Jzuluaga/uwb_atcc")
+
+
+def test_local_csv_matches_the_hf_path_row_for_row(dev_corpus):
+    csv_path, _, paths = dev_corpus
+    local = load_local_corpus(csv_path)
+    reference = _hf_style(paths, DEV_TEXTS)
+
+    assert local.column_names == reference.column_names == ["audio", "text"]
+    assert list(local["text"]) == list(reference["text"]) == DEV_TEXTS
+    for row, expected in zip(local, reference):
+        assert row["audio"]["sampling_rate"] == expected["audio"]["sampling_rate"]
+        assert row["audio"]["array"].dtype == expected["audio"]["array"].dtype
+        assert np.allclose(row["audio"]["array"], expected["audio"]["array"])
+
+
+def test_local_jsonl_matches_local_csv(dev_corpus):
+    csv_path, jsonl_path, _ = dev_corpus
+    from_csv, from_jsonl = load_local_corpus(csv_path), load_local_corpus(jsonl_path)
+    assert list(from_csv["text"]) == list(from_jsonl["text"])
+    for left, right in zip(from_csv, from_jsonl):
+        assert np.allclose(left["audio"]["array"], right["audio"]["array"])
+
+
+def test_local_corpus_resamples_and_resolves_relative_paths(dev_corpus):
+    csv_path, _, _ = dev_corpus
+    dataset = load_local_corpus(csv_path)
+    assert len(dataset) == 3
+    for row in dataset:
+        assert row["audio"]["sampling_rate"] == REAL_SR
+        assert len(row["audio"]["array"]) > 0
+    # the 8 kHz clip is half a second either way, so the cast doubled its frames
+    assert len(dataset[2]["audio"]["array"]) == pytest.approx(REAL_SR * 0.5, abs=2)
+
+
+def test_local_text_is_not_normalized(dev_corpus):
+    """The loader hands references through raw.
+
+    `training.evaluate.build_report` runs `normalize_atc` over references and
+    hypotheses together; normalizing here as well would score the model
+    against an easier reference than the HF path gives it.
+    """
+    csv_path, _, _ = dev_corpus
+    texts = list(load_local_corpus(csv_path)["text"])
+    assert texts == DEV_TEXTS
+    assert texts[0] != normalize_atc(texts[0])  # the fixture really does differ
+
+
+def test_load_real_atc_routes_a_local_path_without_touching_hf(dev_corpus, monkeypatch):
+    csv_path, _, _ = dev_corpus
+
+    def fail(*args, **kwargs):
+        raise AssertionError("load_real_atc reached Hugging Face for a local path")
+
+    monkeypatch.setattr("datasets.load_dataset", fail)
+    dataset = load_real_atc("train", str(csv_path))
+    assert list(dataset["text"]) == DEV_TEXTS
+
+
+def test_missing_local_corpus_names_the_file(tmp_path):
+    with pytest.raises(FileNotFoundError, match="dev.csv"):
+        load_local_corpus(tmp_path / "dev.csv")
+
+
+def test_local_corpus_rejects_a_manifest_without_a_text_column(tmp_path):
+    path = tmp_path / "dev.csv"
+    path.write_text("audio,label\n/tmp/a.wav,hi\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="text"):
+        load_local_corpus(path)
+
+
+def test_optional_source_column_is_carried_through(tmp_path):
+    """A mixed dev set labels where each row came from; unlabelled has no column."""
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    for name in ("a.wav", "b.wav"):
+        _sine(clips / name)
+    labelled = tmp_path / "mixed.csv"
+    labelled.write_text(
+        f"audio,text,source\n{clips / 'a.wav'},one,kixd\n{clips / 'b.wav'},two,eu\n",
+        encoding="utf-8")
+    plain = tmp_path / "plain.csv"
+    plain.write_text(f"audio,text\n{clips / 'a.wav'},one\n", encoding="utf-8")
+
+    mixed = load_local_corpus(labelled)
+    assert "source" in mixed.column_names
+    assert list(mixed["source"]) == ["kixd", "eu"]
+    assert "source" not in load_local_corpus(plain).column_names
+
+
+def test_dev_rows_dump_carries_counts_that_re_aggregate(tmp_path, monkeypatch):
+    """Per-utterance rows must sum back to the aggregate, not approximate it."""
+    refs = ["cleared to land runway one eight", "roger", ""]
+    hyps = ["cleared to land runway one eight", "wrong word here", "hello"]
+    harness = _make_harness(tmp_path, monkeypatch, dev_texts=refs)
+
+    path = harness.write_dev_rows(tmp_path / "dev_rows.jsonl", hyps)
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    assert len(rows) == 3
+    assert [row["reference"] for row in rows] == refs
+    assert [row["hypothesis"] for row in rows] == hyps
+    assert rows[0]["errors"] == 0 and rows[0]["wer"] == 0.0
+    assert rows[0]["audio"] == "/clips/0.wav"
+    # the empty reference is excluded from WER (every word would be an
+    # insertion against nothing) and scored as a hallucination instead
+    assert rows[2]["ref_words"] == 0 and rows[2]["wer"] is None
+    assert rows[2]["errors"] == 0
+    assert rows[2]["hallucinated"] is True
+    assert rows[0]["hallucinated"] is None
+
+    corpus_wer = (sum(row["errors"] for row in rows)
+                  / sum(row["ref_words"] for row in rows))
+    report = harness.dev_report(hyps)
+    assert corpus_wer == pytest.approx(report["wer"]["atc_normalized"])
+    assert sum(row["ref_words"] for row in rows) == report["wer"]["reference_words"]
+
+
+def test_bounded_wer_caps_a_looping_row_at_one_row_of_error(tmp_path, monkeypatch):
+    """The E0 finding: one repetition row outweighed the whole manipulation.
+
+    whisper-tiny loops until `max_new_tokens`, so a short reference can collect
+    dozens of insertions against a denominator it never grows. Bounded WER
+    lets that row say "completely wrong" and no more.
+    """
+    refs = ["cleared to land runway one eight", "roger wilco"]      # 6 + 2 words
+    loop = " ".join(["the city of"] * 30)                           # ~90 insertions
+    hyps = [loop, "roger wilco"]
+    harness = _make_harness(tmp_path, monkeypatch, dev_texts=refs)
+
+    report = harness.dev_report(hyps)
+    unbounded = report["wer"]["atc_normalized"]
+    bounded = report["wer_bounded"]
+
+    # the loop row alone drives the unbounded number far past 1.0
+    assert unbounded > 1.0
+    # bounded: the 6-word row contributes at most its own 6 errors, and the
+    # second row is perfect, so the corpus WER is exactly 6/8
+    assert bounded["atc_normalized"] == pytest.approx(6 / 8)
+    assert bounded["reference_words"] == 8
+    assert bounded["n_capped_rows"] == 1
+    assert bounded["discarded_errors"] > 80
+    assert bounded["atc_normalized"] < unbounded
+
+
+def test_bounded_wer_equals_unbounded_when_nothing_loops(tmp_path, monkeypatch):
+    """The cap must be inert on ordinary rows, or it is not a cap but a change."""
+    refs = ["cleared to land runway one eight", "roger wilco"]
+    hyps = ["cleared to land runway one nine", "roger"]
+    harness = _make_harness(tmp_path, monkeypatch, dev_texts=refs)
+
+    report = harness.dev_report(hyps)
+    assert report["wer_bounded"]["n_capped_rows"] == 0
+    assert report["wer_bounded"]["discarded_errors"] == 0
+    assert report["wer_bounded"]["atc_normalized"] == pytest.approx(
+        report["wer"]["atc_normalized"])
+
+
+def test_dev_rows_keep_raw_counts_and_flag_the_capped_ones(tmp_path, monkeypatch):
+    """The bootstrap needs the unbounded truth; the flag is how you find loops."""
+    refs = ["cleared to land runway one eight", "roger wilco"]
+    loop = " ".join(["the city of"] * 30)
+    harness = _make_harness(tmp_path, monkeypatch, dev_texts=refs)
+
+    path = harness.write_dev_rows(tmp_path / "rows.jsonl", [loop, "roger wilco"])
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    assert rows[0]["errors"] > rows[0]["ref_words"]     # raw, uncapped
+    assert rows[0]["wer"] > 1.0
+    assert rows[0]["capped"] is True
+    assert rows[1]["capped"] is False
+    # the raw rows still sum to the *unbounded* aggregate, unchanged
+    corpus = (sum(row["errors"] for row in rows)
+              / sum(row["ref_words"] for row in rows))
+    assert corpus == pytest.approx(
+        harness.dev_report([loop, "roger wilco"])["wer"]["atc_normalized"])
+
+
+def test_reward_is_scored_on_the_bounded_aggregate(tmp_path, monkeypatch):
+    """Both sides of the subtraction must be the same metric."""
+    refs = ["cleared to land runway one eight", "roger wilco"]
+    loop = " ".join(["the city of"] * 30)
+    harness = _make_harness(tmp_path, monkeypatch, dev_texts=refs)
+
+    responses = iter([[loop, "roger wilco"],                 # baseline: loops
+                      ["cleared to land runway one eight", "roger wilco"]])
+    monkeypatch.setattr(reward_mod, "transcribe",
+                        lambda model, processor, features, device, **kw: next(responses))
+    for name in ("build_dataset", "load_manifest", "prepare_features"):
+        monkeypatch.setattr(reward_mod, name, lambda *a, **kw: [])
+    monkeypatch.setattr(reward_mod, "finetune", lambda model, features, **kw: model)
+    monkeypatch.setattr(reward_mod, "JsonlTextSource", lambda *a, **kw: object())
+    monkeypatch.setattr(reward_mod, "load_config", lambda path: object())
+
+    result = harness({"mode": "procedural"}, str(tmp_path / "trial"))
+
+    # baseline 6/8 bounded (not the ~12.0 unbounded), post 0.0 -> reward 0.75
+    assert result.wer_baseline == pytest.approx(6 / 8)
+    assert result.wer_after == pytest.approx(0.0)
+    assert result.reward == pytest.approx(result.wer_baseline - result.wer_after)
+    # the unbounded number rides along so a loop-driven divergence is visible
+    assert result.metrics["unbounded_wer_after"] == pytest.approx(0.0)
+    assert result.metrics["n_capped_rows"] == 0
+
+
+def test_baseline_cache_without_bounded_wer_is_treated_as_a_miss(tmp_path, monkeypatch):
+    """A pre-cap cached baseline must never be subtracted from a bounded WER."""
+    refs = ["cleared to land", "roger"]
+    harness = _make_harness(tmp_path, monkeypatch, dev_texts=refs)
+    cache = harness._baseline_cache_path()
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"wer": {"atc_normalized": 0.9}}))   # stale schema
+
+    calls = []
+
+    def fake_transcribe(model, processor, features, device, **kwargs):
+        calls.append(1)
+        return list(refs)                                   # perfect: WER 0.0
+
+    monkeypatch.setattr(reward_mod, "transcribe", fake_transcribe)
+    harness._ensure_baseline()
+
+    assert len(calls) == 1                                  # recomputed, not reused
+    assert harness.baseline_report["wer_bounded"]["atc_normalized"] == 0.0
+    assert "wer_bounded" in json.loads(cache.read_text())   # rewritten in place
+
+
+def test_per_source_breakdown_appears_only_when_labelled(tmp_path, monkeypatch):
+    refs = ["cleared to land", "cleared to land"]
+    hyps = ["cleared to land", "totally different words"]
+    harness = _make_harness(tmp_path, monkeypatch, dev_texts=refs)
+
+    assert "by_source" not in harness.dev_report(hyps)
+
+    harness._dev_sources = ["kixd", "eu"]
+    report = harness.dev_report(hyps)
+    assert set(report["by_source"]) == {"eu", "kixd"}
+    assert report["by_source"]["kixd"]["wer"] == 0.0
+    assert report["by_source"]["eu"]["wer"] > 0.0
+    assert report["by_source"]["kixd"]["samples"] == 1
+    # the halves must reconstruct the aggregate the reward is scored on
+    total_words = sum(part["ref_words"] for part in report["by_source"].values())
+    assert total_words == report["wer"]["reference_words"]
+
+
+def test_harness_dev_slice_and_cache_key_follow_the_local_corpus(
+        dev_corpus, tmp_path, monkeypatch):
+    """The plumbing `--dev-corpus` relies on: slice, refs, and cache identity."""
+    csv_path, _, _ = dev_corpus
+    harness = _make_harness(tmp_path, monkeypatch, dev_texts=[])
+    harness.dev_corpus = str(csv_path)
+    harness.dev_indices = (0, 2)
+    harness._dev_refs = harness._dev_categories = harness._dev_features = None
+    monkeypatch.setattr(reward_mod, "prepare_features",
+                        lambda dataset, processor: list(dataset))
+
+    harness._ensure_dev()
+    assert harness._dev_refs == DEV_TEXTS[:2]
+    assert harness._dev_categories == [None, None]
+    assert len(harness._dev_features) == 2
+
+    # the baseline cache is keyed by corpus, so a different dev set cannot
+    # silently reuse the previous one's zero-shot WER
+    cache = harness._baseline_cache_path()
+    assert "dev_csv" in cache.name
+    harness.dev_corpus = "jacktol/atc-dataset"
+    assert harness._baseline_cache_path() != cache
 
 
 # -- finetune_lite --------------------------------------------------------
@@ -215,6 +562,8 @@ def _make_harness(tmp_path, monkeypatch, *, dev_texts):
 
     harness._dev_refs = list(dev_texts)
     harness._dev_categories = [None] * len(dev_texts)
+    harness._dev_sources = [None] * len(dev_texts)
+    harness._dev_paths = [f"/clips/{index}.wav" for index in range(len(dev_texts))]
     harness._dev_features = [{"input_features": None, "labels": []} for _ in dev_texts]
     harness._baseline_report = None
 

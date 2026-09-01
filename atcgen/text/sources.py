@@ -61,6 +61,73 @@ def _with_knobs(config: ScenarioConfig, knobs: dict) -> ScenarioConfig:
     return ScenarioConfig(**values)
 
 
+#: Keys `_parse_record` consumes; anything else on a line is passthrough.
+KNOWN_KEYS = frozenset({"text", "spoken", "transcript", "role", "kind",
+                        "weight", "category", "entities", "display"})
+
+#: Manifest columns `atcgen.dataset.build` owns. A passthrough key may not
+#: collide with one, and the clash is caught when the file is read rather than
+#: however many hours into the run the first affected sample is drawn.
+RESERVED_KEYS = frozenset({"audio", "text", "text_display", "role", "kind",
+                           "category", "duration", "entities", "gen", "lineage",
+                           "tier", "gate"})
+
+
+class TextSourceExhausted(RuntimeError):
+    """A sequential source ran out of utterances mid-build."""
+
+
+def _read_extra(obj: dict, line: str) -> dict:
+    """Unknown keys on a record, for the builder to copy onto the manifest row.
+
+    Values must be JSON scalars: the manifest is loaded into an Arrow table
+    (`build.load_manifest`), and a nested container whose shape varies per row
+    has no single column type -- the same reason `gen` and `lineage` are
+    excluded from training loads.
+    """
+    extra = {key: value for key, value in obj.items() if key not in KNOWN_KEYS}
+    for key, value in extra.items():
+        if key in RESERVED_KEYS:
+            raise ValueError(
+                f"passthrough key {key!r} collides with a manifest column: {line[:80]}")
+        if value is not None and not isinstance(value, (str, int, float, bool)):
+            raise ValueError(
+                f"passthrough key {key!r} must be a JSON scalar: {line[:80]}")
+    return extra
+
+
+def _parse_record(line: str) -> Utterance:
+    """One JSONL line as an `Utterance`."""
+    obj = json.loads(line)
+    text = obj.get("text")
+    spoken = obj.get("spoken", text)
+    transcript = obj.get("transcript", spoken)
+    if not spoken:
+        raise ValueError(f"line missing 'spoken'/'text': {line[:80]}")
+    weight = obj.get("weight", 1.0)
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or weight <= 0:
+        raise ValueError(f"'weight' must be a positive number: {line[:80]}")
+    return Utterance(
+        spoken=spoken,
+        transcript=transcript,
+        role=obj.get("role", "unknown"),
+        kind=obj.get("kind", "external"),
+        weight=float(weight),
+        category=obj.get("category", DEFAULT_CATEGORY),
+        entities=_read_entities(obj.get("entities"), line),
+        display=obj.get("display", ""),
+        extra=_read_extra(obj, line),
+    )
+
+
+def _read_jsonl(path: str | Path) -> list[Utterance]:
+    records = [_parse_record(line) for line in
+               (raw.strip() for raw in open(path)) if line]
+    if not records:
+        raise ValueError(f"no utterances found in {path}")
+    return records
+
+
 class JsonlTextSource:
     """Reads utterances from a JSONL file produced by any external script.
 
@@ -68,41 +135,56 @@ class JsonlTextSource:
     "weight"?: float, "category"?: str, "entities"?: list[dict],
     "display"?: str} or simply {"text": str}. Entities, when present, are
     validated against `atcgen.entities` -- an external generator that ships
-    labels has to ship legal ones. Sampled uniformly with replacement unless
-    the builder wraps it in a `WeightedSampler`.
+    labels has to ship legal ones. Any other key is scalar passthrough and
+    lands on the manifest row as its own column. Sampled uniformly with
+    replacement unless the builder wraps it in a `WeightedSampler`.
     """
 
     def __init__(self, path: str | Path):
-        self.records: list[Utterance] = []
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                obj = json.loads(line)
-                text = obj.get("text")
-                spoken = obj.get("spoken", text)
-                transcript = obj.get("transcript", spoken)
-                if not spoken:
-                    raise ValueError(f"line missing 'spoken'/'text': {line[:80]}")
-                weight = obj.get("weight", 1.0)
-                if isinstance(weight, bool) or not isinstance(weight, (int, float)) or weight <= 0:
-                    raise ValueError(f"'weight' must be a positive number: {line[:80]}")
-                self.records.append(Utterance(
-                    spoken=spoken,
-                    transcript=transcript,
-                    role=obj.get("role", "unknown"),
-                    kind=obj.get("kind", "external"),
-                    weight=float(weight),
-                    category=obj.get("category", DEFAULT_CATEGORY),
-                    entities=_read_entities(obj.get("entities"), line),
-                    display=obj.get("display", ""),
-                ))
-        if not self.records:
-            raise ValueError(f"no utterances found in {path}")
+        self.records: list[Utterance] = _read_jsonl(path)
 
     def sample(self, rng: random.Random) -> Utterance:
         return rng.choice(self.records)
+
+
+class SequentialTextSource:
+    """Consumes a JSONL in file order, exactly once, with no sampling.
+
+    `JsonlTextSource` draws with replacement, which is right when the pool is
+    a distribution to sample from and wrong when it is a *schedule*: 100k draws
+    from 77,888 texts cover only about 56k distinct ones, so a third of the
+    corpus never gets rendered while other texts get rendered five times. A run
+    that must cover a planned set of utterances -- `scripts/expand_text_views.py`
+    output, say, where every text appears exactly twice under two independent
+    channel draws -- reads it in order instead.
+
+    Deliberately does not expose `records`, so `WeightedSampler.for_source`
+    declines to wrap it and the file order survives to the builder. Running off
+    the end raises `TextSourceExhausted` rather than wrapping around, and the
+    builder checks `remaining` up front so the failure lands before the first
+    render rather than hours into one.
+    """
+
+    def __init__(self, path: str | Path):
+        self._records: list[Utterance] = _read_jsonl(path)
+        self._index = 0
+        self.path = str(path)
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+    @property
+    def remaining(self) -> int:
+        return len(self._records) - self._index
+
+    def sample(self, rng: random.Random) -> Utterance:
+        if self._index >= len(self._records):
+            raise TextSourceExhausted(
+                f"{self.path} holds {len(self._records)} utterances and they are "
+                f"all spent; a sequential source never repeats")
+        record = self._records[self._index]
+        self._index += 1
+        return record
 
 
 class WeightedSampler:
@@ -201,7 +283,9 @@ def make_text_source(spec: str | dict | None) -> TextSource:
     * ``"grammar"`` -- the built-in grammar with default scenario knobs.
     * ``"grammar:region=eu,readback_error_prob=0.1"`` -- knobs inline.
     * ``{"kind": "grammar", "region": "eu"}`` -- the same, as a dict.
-    * anything else -- a path to a JSONL file.
+    * ``"sequential:path/to/file.jsonl"`` -- read the file in order, once.
+    * ``{"kind": "sequential", "path": "..."}`` -- the same, as a dict.
+    * anything else -- a path to a JSONL file, sampled with replacement.
     """
     if spec is None:
         return GrammarTextSource()
@@ -212,9 +296,13 @@ def make_text_source(spec: str | dict | None) -> TextSource:
             return GrammarTextSource(**knobs)
         if kind == "jsonl":
             return JsonlTextSource(knobs["path"])
+        if kind == "sequential":
+            return SequentialTextSource(knobs["path"])
         raise ValueError(f"unknown text source kind: {kind!r}")
     if spec == "grammar":
         return GrammarTextSource()
+    if spec.startswith("sequential:"):
+        return SequentialTextSource(spec.split(":", 1)[1])
     if spec.startswith("grammar:"):
         knobs = {}
         for item in spec.split(":", 1)[1].split(","):

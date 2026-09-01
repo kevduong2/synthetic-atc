@@ -14,6 +14,8 @@ from atcgen.config import config_hash, dump_resolved, load_config
 from atcgen.dataset import build as build_mod
 from atcgen.dataset.build import (
     DEFAULT_CONFIG,
+    FRAME_QUANTUM,
+    _quantize_length,
     build_dataset,
     load_manifest,
     make_backend,
@@ -306,7 +308,20 @@ def test_same_seed_reproduces_the_run(tmp_path):
                              PoolSource(utterances([("routine", 1.0, 4)])), FakeTTS())
 
     first, second = run("a"), run("b")
-    assert first.read_text() == second.read_text()
+
+    # `lineage.built_at` is wall-clock, so the two runs disagree whenever they
+    # straddle a second boundary. That is the one field a fixed seed is not
+    # supposed to reproduce; everything else must match byte for byte.
+    def rows(manifest):
+        out = []
+        for line in manifest.read_text().splitlines():
+            record = json.loads(line)
+            record["lineage"] = {key: value for key, value
+                                 in record["lineage"].items() if key != "built_at"}
+            out.append(record)
+        return out
+
+    assert rows(first) == rows(second)
     assert (first.parent / "wavs/000002.wav").read_bytes() == \
            (second.parent / "wavs/000002.wav").read_bytes()
 
@@ -556,3 +571,117 @@ def test_run_writes_resolved_config_and_stats(tmp_path):
     assert 8 <= stats["snr_db"]["p50"] <= 25
     assert set(stats["voices"]) <= set(config.tts.voices)
     assert stats["qc"]["total"] >= 12
+
+
+def sequential_file(tmp_path, n, name="schedule.jsonl"):
+    """A two-view schedule of `n` texts, as `expand_text_views.py` writes one."""
+    path = tmp_path / name
+    path.write_text("".join(
+        json.dumps({"text": f"utterance {index}", "kind": "KIXD",
+                    "base_id": f"t{index:06d}", "view_index": view}) + "\n"
+        for index in range(n) for view in (0, 1)))
+    return path
+
+
+def test_sequential_source_renders_every_scheduled_view_once(tmp_path):
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 0.0}\n")
+    schedule = sequential_file(tmp_path, 6)
+    manifest = build_dataset(config, tmp_path / "out", 12,
+                             f"sequential:{schedule}", FakeTTS())
+    rows = read_manifest(manifest)
+
+    by_base = Counter(row["base_id"] for row in rows)
+    assert len(rows) == 12 and set(by_base.values()) == {2}
+    # file order survives: no sampler reorders a schedule
+    assert [row["base_id"] for row in rows] == [
+        f"t{index:06d}" for index in range(6) for _ in (0, 1)]
+    for base in by_base:
+        views = [row for row in rows if row["base_id"] == base]
+        assert sorted(row["view_index"] for row in views) == [0, 1]
+        assert len({row["text"] for row in views}) == 1
+
+
+def test_build_refuses_a_run_longer_than_its_schedule(tmp_path):
+    config = config_for(tmp_path)
+    schedule = sequential_file(tmp_path, 4)
+    out = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="fewer than the 9 samples requested"):
+        build_dataset(config, out, 9, f"sequential:{schedule}", FakeTTS())
+    # refused before any audio was rendered
+    assert not (out / "manifest.jsonl").exists()
+
+
+def test_passthrough_columns_survive_noise_only_rows(tmp_path):
+    """`Dataset.from_list` reads its schema off row 0 -- which may be noise."""
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 0.5}\n")
+    schedule = sequential_file(tmp_path, 10)
+    manifest = build_dataset(config, tmp_path / "out", 10,
+                             f"sequential:{schedule}", FakeTTS())
+    rows = read_manifest(manifest)
+
+    noise = [row for row in rows if row["category"] == "noise"]
+    speech = [row for row in rows if row["category"] != "noise"]
+    assert noise and speech
+    assert all("base_id" not in row for row in noise)
+    assert all("base_id" in row for row in speech)
+
+    loaded = load_manifest(manifest)
+    assert "base_id" in loaded.column_names
+    assert sum(value is not None for value in loaded["base_id"]) == len(speech)
+
+
+# -- clip length quantization ---------------------------------------------
+#
+# The real KIXD capture is segmented on a 1024-sample grid, so an unquantized
+# generated set is separable from it on length alone -- a label with no
+# acoustic content that KID and any discriminator would read first.
+
+def test_every_written_clip_is_a_whole_number_of_frames(tmp_path):
+    """The property that matters, measured on the files, not the buffers."""
+    config = config_for(tmp_path, "dataset: {noise_only_frac: 0.5}\n")
+    manifest = build_dataset(config, tmp_path / "out", 8, None, FakeTTS())
+    rows = read_manifest(manifest)
+    assert any(row["category"] == "noise" for row in rows)      # both paths covered
+
+    for row in rows:
+        wav, sr = sf.read(tmp_path / "out" / row["audio"])
+        assert sr == config.output.sample_rate
+        assert len(wav) % FRAME_QUANTUM == 0, f"{row['audio']} is {len(wav)} samples"
+
+
+def test_quantize_only_ever_lengthens_and_by_less_than_one_frame():
+    """Truncating would clip speech off the end of the transmission."""
+    rng = np.random.default_rng(0)
+    for length in (1, 2, 1023, 1024, 1025, 4000, 16384):
+        wav = rng.standard_normal(length).astype(np.float32)
+        out = _quantize_length(wav)
+        assert len(out) % FRAME_QUANTUM == 0
+        assert len(out) >= length
+        assert len(out) - length < FRAME_QUANTUM
+        # the original samples are untouched: only the tail is new
+        assert np.array_equal(out[:length], wav)
+
+
+def test_quantize_is_a_no_op_on_an_exact_multiple():
+    wav = np.arange(2048, dtype=np.float32)
+    assert _quantize_length(wav) is not None
+    assert np.array_equal(_quantize_length(wav), wav)
+
+
+def test_quantize_pads_with_channel_material_not_digital_silence():
+    """Zeros at the end would be their own giveaway, and a worse one."""
+    rng = np.random.default_rng(1)
+    # a clip whose tail is a quiet noise floor, as the channel's own pad is
+    wav = np.concatenate([rng.standard_normal(3000).astype(np.float32),
+                          (0.01 * rng.standard_normal(1000)).astype(np.float32)])
+    out = _quantize_length(wav)
+    pad = out[len(wav):]
+
+    assert len(pad) == FRAME_QUANTUM - (len(wav) % FRAME_QUANTUM)
+    assert np.count_nonzero(pad) == len(pad)
+    # the pad's level matches the floor it was reflected from, not silence
+    floor_rms = float(np.sqrt(np.mean(wav[-len(pad):] ** 2)))
+    pad_rms = float(np.sqrt(np.mean(pad ** 2)))
+    assert pad_rms == pytest.approx(floor_rms, rel=0.5)
+    assert pad_rms > 0.0
