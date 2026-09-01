@@ -50,11 +50,12 @@ the first four are done.
 ## 3b. Or hand items 3–4 to an agent
 
 `lab/briefs/prod-setup.md` is a self-contained brief for any agent with a
-shell on the box: it unpacks both zips, checks the counts, runs the
-environment gate and the tests, and writes `lab/reports/prod-setup.md` with a
-READY YES/NO line. Give it the two zip paths. The data zip is built on the Mac
-with the payload command in that brief's header (or ask Claude for
-`atc-gan-data-payload.zip`, ~19 MB).
+shell on the box: it extracts the clips, regenerates the text from the scene
+corpus (or unpacks the Mac data zip), checks the counts, runs the environment
+gate and the tests, and writes `lab/reports/prod-setup.md` with a READY
+YES/NO line. `git pull` first, then:
+
+    Execute lab/briefs/prod-setup.md. CLIPS_ZIP=<path> SCENES_FILE=<path>. Write lab/reports/prod-setup.md and stop.
 
 ## 4. Environment gate on the box (10 minutes, runbook §0.2)
 

@@ -5,12 +5,15 @@ Goal: put the gitignored payload in place and prove the environment, so the
 CPU-only. You do not launch the mission, any GPU job, or any script under
 `scripts/` except the checks listed here.
 
-Inputs (Kevin provides both paths when he hands you this brief):
-- `<CLIPS_ZIP>`: one flat archive of every station's clips, files named
+Inputs (Kevin provides the paths when he hands you this brief):
+- `<CLIPS_ZIP>`: one archive of every station's clips, files named
   `<STATION>_YYYYMMDD_HHMMSS.wav` (may sit inside one top-level folder).
-- `<DATA_ZIP>`: `atc-gan-data-payload.zip` from the Mac; it unpacks to
-  `data/text/…`, `data/real/calibration/…`, `data/real/kixd/…`, `data/vocab/…`
-  relative to the repo root.
+- ONE of:
+  - `<SCENES_FILE>`: `synthetic_generation_deployed_airports_v2.0.1.jsonl`,
+    the scene corpus (concatenated pretty-printed JSON, not line JSONL). The
+    text is regenerated from it (step 4a).
+  - `<DATA_ZIP>`: `atc-gan-data-payload.zip` built on the Mac; unpacks to
+    `data/text/…`, `data/real/…`, `data/vocab/…` at the repo root (step 4b).
 
 Deliverable: `lab/reports/prod-setup.md` with a PASS/FAIL line per step below
 and the exact numbers. If any step fails, stop there, write what failed and
@@ -42,17 +45,26 @@ edit anything under `atcgen/`, `configs/`, `docs/`; commit.
    `+cpu` (then `uv sync` did not use the CUDA index in `pyproject.toml`; report
    it, do not work around it). Record libsndfile's version (expect 1.2.2).
 
-4. **Data payload.**
+4. **Text and vocab** — do 4a if Kevin gave you a scenes file, else 4b.
+
+   4a. Regenerate from the scene corpus (needs internet for the vocab step):
+   ```powershell
+   uv run python scripts/convert_scenes.py --scenes <SCENES_FILE> --out data/text/scenes_v2.0.1.jsonl
+   uv run python scripts/expand_text_views.py --text data/text/scenes_v2.0.1.jsonl --out data/text/scenes_v2.0.1_2view.jsonl --views 2 --seed 0
+   uv run python scripts/harvest_vocab.py
+   ```
+   4b. Unpack the Mac payload:
    ```powershell
    uv run python -m zipfile -t <DATA_ZIP>
    Expand-Archive <DATA_ZIP> -DestinationPath . -Force
    ```
-   Then verify, and record each number:
+   Either way, verify and record each number:
    - `data/text/scenes_v2.0.1.jsonl` has 77,888 lines; `data/text/scenes_v2.0.1_2view.jsonl` has 155,776
-     (`(Get-Content <file> | Measure-Object -Line).Lines`).
-   - `data/real/calibration/` holds 100 wavs.
-   - `data/real/kixd/kixd_dev.csv` and `kixd_locked_day.csv` exist. **Do not open
-     `kixd_locked_day.csv`**; existence only.
+     (`(Get-Content <file> | Measure-Object -Line).Lines`). A different count
+     means a different scene file; report it, FAIL.
+   - `data/vocab/real_anchor.json` exists.
+   - (4b only) `data/real/calibration/` holds 100 wavs; `data/real/kixd/kixd_dev.csv`
+     and `kixd_locked_day.csv` exist. **Do not open `kixd_locked_day.csv`**.
 
 5. **Clips.**
    ```powershell
@@ -93,7 +105,7 @@ torch: <ver>   cuda: True/False   gpu: <name>   libsndfile: <ver>
 1 repo        PASS/FAIL
 2 toolchain   PASS/FAIL
 3 env         PASS/FAIL
-4 data        PASS/FAIL   text 77888 / 155776   calibration wavs 100   kixd csvs present
+4 data        PASS/FAIL   via 4a|4b   text 77888 / 155776   vocab present
 5 clips       PASS/FAIL   <station table>   unmatched names: <n>   nested folder: yes/no
 6 tests       PASS/FAIL   <n> passed, <n> skipped, <n> failed
 7 lab         PASS/FAIL
