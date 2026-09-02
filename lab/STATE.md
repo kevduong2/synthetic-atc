@@ -17,12 +17,11 @@ B3 delegation (Kevin, 2026-09-02 morning): Kevin defers the band-edge decision t
 - D1 (calibration balanced, 6 stations n≥30): PASS 2026-09-02 (min n=85, station_mix exact six)
 - D2 (residual selected): PASS 2026-09-02 (selected, step 3500, all 10 evals gates_ok)
 - D3 (fidelity: in-band LTAS ≤2 dB, matched KID w/ SE): FAIL 2026-09-02 — in-band max 2.8 dB (audit-confirmed 2.77); KID 0.003443±0.000731 confirmed. Audit notes: off-vs-on KID claim struck (unpaired 73–77-clip cohorts); reference curve itself sits 7.4 dB off the real cohort in band — vs real, edges are +10.8/+10.3 dB not +16.3/+16.4.
-- D3' (real-cohort LTAS <=2.0 dB at 1/2/3 kHz + matched KID with SE): FAIL-STOP 2026-09-02 — max gap 4.69 dB; WavLM KID 0.004134+/-0.000797 valid at 150/997 clips.
-- D4 (corpus complete: 4×38,944 + 4,800 rows, 3 files): pending
+- D3' (real-cohort LTAS ≤2.0 dB at 1/2/3 kHz + matched KID with SE): FAIL-STOP 2026-09-02 — max gap 4.69 dB at 1 kHz (audit-exact); KID 0.004134±0.000797 valid. Audit PASS-with-notes: deficit pre-existing, masked by defective hardcoded reference (+2.77 − 7.37 = −4.60 on the first render too); LP blameless in-band, fixed 4 kHz (−13 dB paired).
 ## Running job
 none (GPU lock free)
 ## Next action
-director: review lab/reports/prod-fid-rerun.md; any recipe correction requires a new preregistered mission
+KEVIN: mission stopped by the pre-registered kill rule. The frozen recipe has a genuine ~4.7 dB 1 kHz deficit vs real audio (present in both renders; not the LP's fault). Options: (a) ship V1.0.0 as-is — KID healthy, in-band LTAS the only miss; (b) authorize a pre-registered recipe-correction mission (frozen-value change beyond the delegated band edge), re-gate, then render. §3 blocked until you choose.
 ## Status log (newest first, one line each, written by watchers)
 - 2026-09-02 15:18Z prod-fid-rerun: D3' FAIL-STOP; real-cohort max 1/2/3 kHz gap 4.69 dB; matched WavLM KID 0.004134+/-0.000797
 - 2026-09-02 15:11Z prod-fid-rerun: finished, exit code 0 after 150 clips rendered
