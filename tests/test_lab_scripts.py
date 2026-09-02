@@ -108,6 +108,30 @@ def test_filter_variants_attenuate_out_of_band_energy(tmp_path: Path, capsys):
     assert band_power(lphp, 1000) > 0.5 * band_power(x, 1000)
 
 
+def test_filter_variants_build_b3_cohorts_from_manifest(tmp_path: Path):
+    from scripts.analysis import filter_variants
+
+    src = tmp_path / "render" / "wavs"
+    src.mkdir(parents=True)
+    manifest = src.parent / "manifest.jsonl"
+    rows = []
+    for index, residual_on in enumerate((False, True, True)):
+        name = f"{index:06d}.wav"
+        sf.write(src / name, np.zeros(16000, dtype=np.float32), 16000)
+        steps = [{"primitive": "residual_translate"}] if residual_on else []
+        rows.append({"audio": f"wavs/{name}", "gen": {"channel": {"steps": steps}}})
+    manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    out = tmp_path / "variants"
+    assert filter_variants.main([
+        str(src), "--out", str(out), "--manifest", str(manifest),
+    ]) == 0
+    assert sorted(path.name for path in (out / "off").glob("*.wav")) == ["000000.wav"]
+    expected_on = ["000001.wav", "000002.wav"]
+    for name in ("on", "on_lp", "on_lp_hp"):
+        assert sorted(path.name for path in (out / name).glob("*.wav")) == expected_on
+
+
 def test_local_corpus_per_station_cap_bounds_the_ingest(tmp_path: Path):
     from atcgen.dataset.local_corpus import build_corpus, cap_per_station
 
