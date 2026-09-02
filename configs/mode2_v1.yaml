@@ -1,0 +1,85 @@
+# V1 production profile copied from mode2_fastcut_kixd.yaml. Calibration uses
+# the full multi-airport fit, while station_mix draws the six deployed
+# facilities uniformly. The residual remains disabled until P2 selects
+# runs/fastcut_v1/G_selected.pt.
+
+mode: calibrated
+seed: 0
+
+output:
+  sample_rate: 16000
+  format: wav
+  loudness_mode: rms
+  loudness_db: {uniform: [-25, -20]}
+  loudness_lufs: -23.0
+
+tts:
+  voices:
+    - af_heart
+    - af_bella
+    - af_nicole
+    - af_sarah
+    - af_sky
+    - am_adam
+    - am_michael
+    - am_eric
+    - am_onyx
+    - bf_emma
+    - bf_isabella
+    - bm_george
+    - bm_lewis
+  speed: {uniform: [1.0, 1.4]}
+
+voice_augment:
+  pitch_semitones: {prob: 0.5, uniform: [-2, 2]}
+  tempo: {prob: 0.3, uniform: [0.95, 1.05]}
+  eq_tilt_db: {prob: 0.4, uniform: [-2, 2]}
+
+dataset:
+  noise_only_frac: 0.03
+  pilot_double_hop_prob: 0.25
+  category_quotas: {}
+
+calibrated:
+  calibration:
+    corpus_dir: reference-data-for-v1-run/airport_clips_v2
+    presets: runs/channel_data_v2/train/presets.jsonl
+    noise_bank: runs/channel_data_v2/train/noise
+    station_mix:
+      KEUG_CASCADE_APR_DEP: 1
+      KOJC_KC_CENTER: 1
+      S50_SEATTLE_CENTER: 1
+      KSLE_TOWER: 1
+      KIXD_TOWER: 1
+      KSDL_TOWER: 1
+    snr_jitter_db: {uniform: [-3, 3]}
+    cross_station_prob: 0.1
+
+  residual:
+    enabled: false
+    checkpoint: runs/fastcut_v1/G_selected.pt
+    apply_prob: 0.5
+    alpha: 1.0
+    residual_scale_max: 0.35
+
+  post_effects:
+    squelch:
+      prob: 0.8
+      gated_floor_prob: 0.045
+    dropouts:
+      prob: 0.15
+    codec:
+      prob: 0.8
+      kind: mp3
+      quality: {uniform: [0.75, 0.95]}
+
+  expansion:
+    real_manifest: data/real/labeled/manifest.jsonl
+    target_total: 10000
+    category_quotas: {}
+    holdout_frac: 0.15
+
+qc:
+  enabled: true
+  max_retries: 3
+  asr_roundtrip: false
