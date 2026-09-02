@@ -39,7 +39,7 @@ from scipy.signal import fftconvolve
 from ...config import (CalibratedConfig, DistSpec, PostEffectsConfig,
                        ResidualConfig)
 from ..chain import PAD_SEC, ChannelRecord, UtteranceMeta
-from ..primitives import TARGET_SR, codec_roundtrip, dropouts, resample
+from ..primitives import PRIMITIVES, TARGET_SR, codec_roundtrip, dropouts, resample
 from ..primitives import cochannel_mix, ptt_truncation, squelch_clicks, squelch_gate
 from .preset import Preset, apply_preset, fir_taps, load_presets
 
@@ -286,6 +286,7 @@ class CalibratedChannel:
 
         x = self._post_effects(x, rng, record, pad, preset, interference)
         x = self._residual(x, rng, record, meta)
+        x = self._final_chain(x, rng, record)
         peak = float(np.abs(x).max())
         if peak > 1.0:
             x = x / peak * 0.98
@@ -373,6 +374,20 @@ class CalibratedChannel:
         width = max(3, int(self.target_sr * DROPOUT_RAMP_MS / 1000))
         ramp = np.hanning(width + 2)[1:-1]
         return (x * np.convolve(gain, ramp / ramp.sum(), mode="same")).astype(np.float32)
+
+    def _final_chain(self, x: np.ndarray, rng: random.Random,
+                     record: ChannelRecord) -> np.ndarray:
+        for step in self.post.chain:
+            if rng.random() >= step.prob:
+                continue
+            fn = PRIMITIVES.get(step.primitive)
+            if fn is None:
+                raise ValueError(f"unknown channel primitive: {step.primitive}")
+            drawn = {name: spec.sample(rng) for name, spec in step.params.items()}
+            drawn = {name: value for name, value in drawn.items() if value is not None}
+            x = fn(x, self.target_sr, rng, **drawn)
+            record.steps.append({"primitive": step.primitive, "hop": 0, **drawn})
+        return x
 
     def _post_effects(self, x: np.ndarray, rng: random.Random, record: ChannelRecord,
                       pad: int, preset: Preset,

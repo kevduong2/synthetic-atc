@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from atcgen.channel.learned.channel_fit import select_rows
@@ -130,6 +132,37 @@ def test_filter_variants_build_b3_cohorts_from_manifest(tmp_path: Path):
     expected_on = ["000001.wav", "000002.wav"]
     for name in ("on", "on_lp", "on_lp_hp"):
         assert sorted(path.name for path in (out / name).glob("*.wav")) == expected_on
+
+
+@pytest.mark.parametrize(("reference", "compared", "sign"), [
+    ("real", "v1", 1),
+    ("v1", "real", -1),
+])
+def test_ltas_check_writes_direct_cohort_gaps(
+        tmp_path: Path, monkeypatch, reference: str, compared: str, sign: int):
+    from scripts.analysis import ltas_check
+
+    sr = 16000
+    t = np.arange(sr, dtype=np.float32) / sr
+    for label, high_band_scale in (("real", 0.1), ("v1", 0.4)):
+        directory = tmp_path / label
+        directory.mkdir()
+        audio = np.sin(2 * np.pi * 400 * t) + high_band_scale * np.sin(2 * np.pi * 2000 * t)
+        sf.write(directory / "000000.wav", audio.astype(np.float32), sr)
+    output = tmp_path / f"{reference}.json"
+    monkeypatch.setattr(sys, "argv", [
+        "ltas_check.py", str(tmp_path / "real"), str(tmp_path / "v1"),
+        "--label", "real", "--label", "v1", "--cohort-reference", reference,
+        "--json", str(output),
+    ])
+
+    ltas_check.main()
+
+    result = json.loads(output.read_text())
+    direct = result["direct_gaps"][compared]
+    assert direct["definition"] == f"{compared} - {reference}"
+    assert np.sign(direct["gap_db"][5]) == sign
+    assert direct["max_abs_gap_1k_3k"] > 0
 
 
 def test_local_corpus_per_station_cap_bounds_the_ingest(tmp_path: Path):

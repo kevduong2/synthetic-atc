@@ -19,7 +19,7 @@ from atcgen.channel.learned.backend import (COCHANNEL_PROB, PTT_PROB,
                                             _load_residual)
 from atcgen.channel.learned.preset import BAND_EDGES, Preset, band_centers, write_presets
 from atcgen.channel.chain import UtteranceMeta
-from atcgen.config import DistSpec, PostEffectsConfig, ResidualConfig, load_config
+from atcgen.config import ChainStep, DistSpec, PostEffectsConfig, ResidualConfig, load_config
 from atcgen.dataset.build import build_dataset, make_backend
 
 SR = 16000
@@ -331,6 +331,25 @@ def test_residual_runs_after_all_post_effects(calibration, monkeypatch):
     assert len(residual.calls) == 1
 
 
+def test_final_chain_runs_after_residual(calibration):
+    effects = _no_post()
+    effects.chain = [ChainStep("lowpass", 1.0, {
+        "cutoff_hz": DistSpec.parse(3800),
+        "order": DistSpec.parse(8),
+        "zero_phase": DistSpec.parse(True),
+    })]
+    residual = _StubResidual()
+    channel = _channel(calibration, post_effects=effects, residual=residual,
+                       residual_prob=1.0, residual_alpha=DistSpec.parse(1.0))
+
+    _, record = channel(_speech(), SR, random.Random(0))
+
+    assert record.applied()[-2:] == ["residual_translate", "lowpass"]
+    assert record.steps[-1] == {"primitive": "lowpass", "hop": 0,
+                               "cutoff_hz": 3800, "order": 8,
+                               "zero_phase": True}
+
+
 def test_noise_only_rows_skip_the_residual(calibration):
     residual = _StubResidual()
     channel = _channel(calibration, post_effects=_no_post(), residual=residual,
@@ -463,6 +482,7 @@ calibrated:
   post_effects:
     squelch: {{prob: 0.8, gated_floor_prob: 0.05}}
     codec: {{prob: 0.5, kind: mp3, quality: {{uniform: [0.8, 0.95]}}}}
+    chain: [{{primitive: lowpass, cutoff_hz: 3800, order: 8, zero_phase: true}}]
 """)
     return load_config(text)
 
@@ -473,6 +493,7 @@ def test_make_backend_builds_the_calibrated_channel(tmp_path, calibration):
     assert backend.noise is not None
     assert backend.cross_station_prob == pytest.approx(0.1)
     assert backend.post.squelch.gated_floor_prob == pytest.approx(0.05)
+    assert backend.post.chain[0].primitive == "lowpass"
 
 
 def test_make_backend_needs_a_calibrated_section():

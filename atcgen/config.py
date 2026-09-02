@@ -270,6 +270,7 @@ class PostEffectsConfig:
     squelch: SquelchEffectConfig = field(default_factory=SquelchEffectConfig)
     dropouts: DropoutsEffectConfig = field(default_factory=DropoutsEffectConfig)
     codec: CodecEffectConfig = field(default_factory=CodecEffectConfig)
+    chain: list[ChainStep] = field(default_factory=list)
 
 
 @dataclass
@@ -526,7 +527,8 @@ def _effect(value: Any, path: str, cls: type, names: set[str]) -> Any:
 
 def _parse_post_effects(value: Any, path: str) -> PostEffectsConfig:
     data = _mapping(value, path)
-    _reject_unknown(data, {"squelch", "dropouts", "codec"}, path)
+    _reject_unknown(data, {"squelch", "dropouts", "codec", "chain"}, path)
+    chain = _parse_channel({"chain": data.get("chain", [])}, path).chain
     return PostEffectsConfig(
         _effect(data.get("squelch", {}), f"{path}.squelch", SquelchEffectConfig,
                 {"prob", "gated_floor_prob"}),
@@ -534,6 +536,7 @@ def _parse_post_effects(value: Any, path: str) -> PostEffectsConfig:
                 {"prob"}),
         _effect(data.get("codec", {}), f"{path}.codec", CodecEffectConfig,
                 {"prob", "kind", "quality"}),
+    chain,
     )
 
 

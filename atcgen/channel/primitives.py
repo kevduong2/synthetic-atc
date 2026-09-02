@@ -152,6 +152,14 @@ def bandpass(x: np.ndarray, sr: int, rng: random.Random,
     return signal.sosfilt(sos, x).astype(np.float32)
 
 
+def lowpass(x: np.ndarray, sr: int, rng: random.Random,
+            cutoff_hz: float = 3800.0, order: int = 8,
+            zero_phase: bool = True) -> np.ndarray:
+    sos = signal.butter(order, cutoff_hz, btype="lowpass", fs=sr, output="sos")
+    fn = signal.sosfiltfilt if zero_phase else signal.sosfilt
+    return fn(sos, x).astype(np.float32)
+
+
 def _peaking_sos(sr: int, f0: float, gain_db: float, q: float) -> list[float]:
     """RBJ peaking-EQ biquad as one `sosfilt` row."""
     a_gain = 10.0 ** (gain_db / 40.0)
@@ -552,6 +560,7 @@ PRIMITIVES = {
     "narrowband_roundtrip": narrowband_roundtrip,
     "resample_chain": resample_chain,
     "bandpass": bandpass,
+    "lowpass": lowpass,
     "agc_wander": agc_wander,
     "agc_attack": agc_attack,
     "am_distortion": am_distortion,

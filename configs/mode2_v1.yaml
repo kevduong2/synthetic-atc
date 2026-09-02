@@ -72,6 +72,11 @@ calibrated:
       prob: 0.8
       kind: mp3
       quality: {uniform: [0.75, 0.95]}
+    chain:
+      - primitive: lowpass
+        cutoff_hz: 3800
+        order: 8
+        zero_phase: true
 
   expansion:
     real_manifest: data/real/labeled/manifest.jsonl

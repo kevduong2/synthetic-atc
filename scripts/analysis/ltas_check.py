@@ -83,6 +83,8 @@ def main() -> None:
     ap.add_argument("--label", action="append", default=[])
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--json", default=None)
+    ap.add_argument("--cohort-reference", default=None,
+                    help="label whose measured curve is the direct-gap reference")
     a = ap.parse_args()
 
     labels = a.label + [Path(d).name for d in a.dirs[len(a.label):]]
@@ -110,6 +112,26 @@ def main() -> None:
         print(f"{'  gap':>8} " + "".join(f"{g:>+8.1f}" for g in gaps)
               + f"   max|gap| 1-3k = {out['curves'][label]['max_abs_gap_1k_3k']:.1f} dB")
         print()
+
+    if a.cohort_reference:
+        if a.cohort_reference not in out["curves"]:
+            raise SystemExit(f"unknown cohort reference label: {a.cohort_reference}")
+        reference_db = out["curves"][a.cohort_reference]["db"]
+        out["cohort_reference"] = a.cohort_reference
+        out["direct_gaps"] = {}
+        for label, curve in out["curves"].items():
+            if label == a.cohort_reference:
+                continue
+            gaps = [value - reference for value, reference in zip(curve["db"], reference_db)]
+            mid = [gap for point, gap in zip(POINTS, gaps) if 1000.0 <= point <= 3000.0]
+            out["direct_gaps"][label] = {
+                "definition": f"{label} - {a.cohort_reference}",
+                "gap_db": [round(gap, 2) for gap in gaps],
+                "max_abs_gap_1k_3k": round(max(abs(gap) for gap in mid), 2),
+            }
+            print(f"{label + '-' + a.cohort_reference:>8} "
+                  + "".join(f"{gap:>+8.1f}" for gap in gaps)
+                  + f"   max|gap| 1-3k = {max(abs(gap) for gap in mid):.1f} dB")
 
     if a.json:
         Path(a.json).write_text(json.dumps(out, indent=2))
