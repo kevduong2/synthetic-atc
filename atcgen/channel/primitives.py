@@ -171,6 +171,13 @@ def _peaking_sos(sr: int, f0: float, gain_db: float, q: float) -> list[float]:
     return [b[0] / a[0], b[1] / a[0], b[2] / a[0], 1.0, a[1] / a[0], a[2] / a[0]]
 
 
+def peaking_eq(x: np.ndarray, sr: int, rng: random.Random, f0_hz: float = 1000.0,
+               gain_db: float = 0.0, q: float = 1.0) -> np.ndarray:
+    """One fixed peaking bell. Single pass, so `gain_db` is the realized gain at `f0_hz`."""
+    sos = np.array([_peaking_sos(sr, f0_hz, gain_db, q)])
+    return signal.sosfilt(sos, x).astype(np.float32)
+
+
 def _shelf_sos(sr: int, f0: float, gain_db: float, high: bool) -> list[float]:
     """RBJ low/high shelving biquad as one `sosfilt` row."""
     a_gain = 10.0 ** (gain_db / 40.0)
@@ -561,6 +568,7 @@ PRIMITIVES = {
     "resample_chain": resample_chain,
     "bandpass": bandpass,
     "lowpass": lowpass,
+    "peaking_eq": peaking_eq,
     "agc_wander": agc_wander,
     "agc_attack": agc_attack,
     "am_distortion": am_distortion,

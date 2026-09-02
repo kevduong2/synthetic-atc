@@ -290,6 +290,22 @@ def test_mic_coloration_peaks_are_bounded_and_local():
     assert np.array_equal(P.mic_coloration(x, SR, random.Random(0), tilt_db=0.0, peaks=0), x)
 
 
+def test_peaking_eq_realizes_its_gain_at_f0_and_stays_local():
+    rng = random.Random(0)
+    state = rng.getstate()
+
+    def gain_at(f):
+        x = _tone(f=f, sec=1.0)
+        y = P.peaking_eq(x, SR, rng, f0_hz=1100.0, gain_db=7.0, q=1.7)
+        half = len(x) // 2  # past the filter transient
+        return 20 * np.log10(_rms(y[half:]) / _rms(x[half:]))
+
+    assert gain_at(1100.0) == pytest.approx(7.0, abs=0.2)
+    assert abs(gain_at(110.0)) < 0.5
+    assert abs(gain_at(3300.0)) < 0.5
+    assert rng.getstate() == state
+
+
 @pytest.mark.parametrize("rate_hz", [0.5, 2.0])
 def test_fading_modulates_the_envelope_at_the_configured_rate(rate_hz):
     x = _tone(f=1000, sec=8.0)

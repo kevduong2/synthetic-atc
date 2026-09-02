@@ -77,6 +77,11 @@ calibrated:
         cutoff_hz: 3800
         order: 8
         zero_phase: true
+      - primitive: peaking_eq
+        prob: 1.0
+        f0_hz: 1100
+        gain_db: 7.0
+        q: 1.7
 
   expansion:
     real_manifest: data/real/labeled/manifest.jsonl
