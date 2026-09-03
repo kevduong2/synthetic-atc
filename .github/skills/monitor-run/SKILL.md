@@ -8,8 +8,15 @@ description: Watching a running atc-gan job as the lab assistant. The single job
 You watch by running one blocking command, not by polling in chat turns:
 
 ```
-uv run python scripts/lab/jobs.py watch <id> --interval 300 --max-wait 1500
+uv run python scripts/lab/jobs.py watch <id> --interval 900 --max-wait 900
 ```
+
+Cadence (Kevin, 2026-09-02): check and report every ~15 minutes — one 900 s
+blocking watch call per check (900 s calls survive the session fine; earlier
+240 s guidance is obsolete), one STATE.md status line and one reply per watch
+assignment, never per poll. On `timeout` keep looping quietly; write the
+status line when a non-timeout event ends the watch or when your iteration
+budget runs out.
 
 It checks the job every `--interval` seconds and returns ONE JSON event with
 `event`, `state`, `exit_code`, `elapsed_s`, `log_idle_s`, `last_progress`,
