@@ -1,4 +1,4 @@
-# Lab state            (updated 2026-09-03 03:49Z by experiment-engineer)
+# Lab state            (updated 2026-09-03 11:22Z by experiment-engineer)
 Mission: lab/missions/prod-v1.md — V1 production corpus from the FROZEN config (runbook docs/runbook-v1-3080.md)
 Clock: started 2026-09-01; overnight autonomous run; per-phase kill rules in the mission file
 Standing rule (Kevin, 2026-09-01): never enumerate/read files inside dataset dirs (~209k clips); use one aggregate shell command for counts/sizes; 5-min timeout on ad-hoc data reads ONLY — runbook compute jobs (fit/train/render) run to expected duration under a watcher. Every brief must carry this.
@@ -12,7 +12,7 @@ Recipe-correction authorization (Kevin, 2026-09-02 afternoon): "just fix it, the
 - P2 residual         DONE (D2 PASS: G_selected.pt step 3500, kid 0.0058±0.0004; report lab/reports/prod-p2-resid.md)
 - FID fidelity        DONE (D3'' PASS after the peaking_eq fix: real-cohort in-band max 1.43 dB, matched WavLM KID 0.004331+/-0.000938 <= 0.005728 guardrail; report lab/reports/prod-fix-1khz.md. Superseded D3' FAIL-STOP: lab/reports/prod-fid-rerun.md)
 - P3 render s1..s4+noise  DONE (all five outputs exact aggregate counts + stats.json; report lab/reports/prod-p3-render.md)
-- P4 gate+export      NOT RUN
+- P4 gate+export      DONE (D4 PASS: all four shard gates exit 0; export wrote 157,462 train + 3,114 test rows and manifest.json; report lab/reports/prod-p4.md)
 - CLOSE               PENDING
 ## Decisions
 - D1 (calibration balanced, 6 stations n≥30): PASS 2026-09-02 (min n=85, station_mix exact six)
@@ -23,8 +23,16 @@ Recipe-correction authorization (Kevin, 2026-09-02 afternoon): "just fix it, the
 ## Running job
 none
 ## Next action
-experiment-engineer: execute lab/briefs/prod-p4.md runbook §4 gate + export
+director: start prod-close transcription, audit, and sign-off
 ## Status log (newest first, one line each, written by watchers)
+- 2026-09-03 11:22Z prod-p4: D4 PASS; shard 4 finished exit 0 (gold 4,965, silver 7,542, adversarial 10,796, rejected 15,641); export wrote 157,462 train + 3,114 test rows and manifest.json, hashes verified
+- 2026-09-03 10:05Z prod-p4-gate-s4: launched, running under GPU lock, child PID 64388; shard 3 finished exit 0 with 38,944 clips gated; watch pending
+- 2026-09-03 10:01Z prod-p4-gate-s3: PASS; finished exit 0 after 11,110 seconds; gold 4,964, silver 7,443, adversarial 10,929, rejected 15,608; noise set goes direct to export per runbook §4
+- 2026-09-03 06:56Z prod-p4-gate-s3: launched, running under GPU lock, child PID 34824; shard 2 finished exit 0 with 38,944 clips gated; watch pending
+- 2026-09-03 06:43Z prod-p4-gate-s2: PASS; finished exit 0 after 4,843 seconds; gold 4,935, silver 7,422, adversarial 10,934, rejected 15,653
+- 2026-09-03 05:22Z prod-p4-gate-s2: launched, running under GPU lock, child PID 66072; shard 1 finished exit 0 with 38,944 clips gated; watch pending
+- 2026-09-03 04:05Z prod-p4-gate-s1: launched, running under GPU lock, child PID 50432; gating 0/4,868 batches; watch pending
+- 2026-09-03 03:53Z prod-p4: preflight 785 passed, 3 skipped; pre-gate manifests total 160,576 rows; GPU lock free; launching prod-p4-gate-s1
 - 2026-09-03 03:49Z prod-p3-noise: PASS; finished exit 0 after 158 seconds; aggregate output count 4,800 WAV files; stats.json present
 - 2026-09-03 03:46Z prod-p3-noise: launched, running under GPU lock, child PID 18480; watch pending
 - 2026-09-03 03:44Z prod-p3-s4: PASS; finished exit 0 after 9,976 seconds; aggregate output count 38,944 WAV files; stats.json present
