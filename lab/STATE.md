@@ -12,8 +12,8 @@ Recipe-correction authorization (Kevin, 2026-09-02 afternoon): "just fix it, the
 - P2 residual         DONE (D2 PASS: G_selected.pt step 3500, kid 0.0058±0.0004; report lab/reports/prod-p2-resid.md)
 - FID fidelity        DONE (D3'' PASS after the peaking_eq fix: real-cohort in-band max 1.43 dB, matched WavLM KID 0.004331+/-0.000938 <= 0.005728 guardrail; report lab/reports/prod-fix-1khz.md. Superseded D3' FAIL-STOP: lab/reports/prod-fid-rerun.md)
 - P3 render s1..s4+noise  DONE (all five outputs exact aggregate counts + stats.json; report lab/reports/prod-p3-render.md)
-- P4 gate+export      DONE (D4 PASS: all four shard gates exit 0; export wrote 157,462 train + 3,114 test rows and manifest.json; report lab/reports/prod-p4.md)
-- CLOSE               PENDING
+- P4 gate+export      DONE (D4 PASS: 19,694 gold / 29,976 silver / 43,765 adversarial / 62,341 rejected; export wrote 157,462 train + 3,114 test rows and manifest.json; commit 211784d; report lab/reports/prod-p4.md)
+- CLOSE               DONE
 ## Decisions
 - D1 (calibration balanced, 6 stations n≥30): PASS 2026-09-02 (min n=85, station_mix exact six)
 - D2 (residual selected): PASS 2026-09-02 (selected, step 3500, all 10 evals gates_ok)
@@ -23,8 +23,9 @@ Recipe-correction authorization (Kevin, 2026-09-02 afternoon): "just fix it, the
 ## Running job
 none
 ## Next action
-director: start prod-close transcription, audit, and sign-off
+mission complete — signed by lab-director 2026-09-03
 ## Status log (newest first, one line each, written by watchers)
+- 2026-09-03 prod-close: audit PASS-with-notes; addendum fixed; mission signed
 - 2026-09-03 11:22Z prod-p4: D4 PASS; shard 4 finished exit 0 (gold 4,965, silver 7,542, adversarial 10,796, rejected 15,641); export wrote 157,462 train + 3,114 test rows and manifest.json, hashes verified
 - 2026-09-03 10:05Z prod-p4-gate-s4: launched, running under GPU lock, child PID 64388; shard 3 finished exit 0 with 38,944 clips gated; watch pending
 - 2026-09-03 10:01Z prod-p4-gate-s3: PASS; finished exit 0 after 11,110 seconds; gold 4,964, silver 7,443, adversarial 10,929, rejected 15,608; noise set goes direct to export per runbook §4

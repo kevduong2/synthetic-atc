@@ -109,6 +109,7 @@ alpha 122 and beta 360 for that arm, a posterior mean of 0.2531.
 The honest reading is that the counterfactual harness refused a dead proxy.
 That is the system working, not evidence that hardness selection improved the
 training distribution.
+training distribution.
 
 ## Interpretation and open items
 
@@ -312,3 +313,67 @@ frozen procedure is in `docs/runbook-v1-3080.md`.
 Primary run artifacts are `runs/power_check_kixd/` (22 cells),
 `runs/e1_mode2_kixd/`, `runs/fastcut_kixd_smoke/`, and
 `runs/channel_data_kixd/`.
+
+## 2026-09-03 prod-v1 close-out addendum
+
+### Station clips and calibration presets
+
+| Station | P0 clips | P1 kept presets |
+|---|---:|---:|
+| KEUG | 126 | 85 |
+| KOJC | 86,104 | 143 |
+| S50 | 10,305 | 144 |
+| KSLE | 8,157 | 145 |
+| KIXD | 8,000 | 150 |
+| KSDL | 94,537 | 142 |
+
+Source: [lab/reports/prod-p0-setup.md](../lab/reports/prod-p0-setup.md); [lab/reports/prod-p1-calib.md](../lab/reports/prod-p1-calib.md).
+
+### Residual selection
+
+| Status | Step | kid_mean +/- SE |
+|---|---:|---:|
+| selected | 3,500 | 0.0058 +/- 0.0004 |
+
+Source: [lab/reports/prod-p2-resid.md](../lab/reports/prod-p2-resid.md); [lab/reports/prod-fid.audit.md](../lab/reports/prod-fid.audit.md).
+
+### Fidelity history
+
+| Stage | Reference or change | Result |
+|---|---|---|
+| D3 | Hardcoded reference | **FAIL**; in-band max 2.8 dB |
+| LP step | `lowpass` at 3.8 kHz, order 8, zero-phase | Landed before the D3' re-measurement (commit `2e2dee2`); blameless in band, fixed the 4 kHz excess |
+| D3' | Real cohort | **FAIL**; 4.69 dB at 1 kHz; deficit was pre-existing and masked by the hardcoded reference |
+| Recipe correction | `peaking_eq`: f0 1100 Hz, +7.0 dB, Q 1.7 | Applied after the LP |
+| D3'' | Real cohort plus KID guardrail | **PASS**; in-band max 1.43 dB; KID 0.004331 +/- 0.000938 <= guardrail 0.005728 |
+
+Audit note: the residual off-vs-on improvement claim is **STRUCK**; the 77/73-clip cohorts were disjoint and unpaired, below the ~150-per-side reportability floor and the 2xSE visibility bar.
+
+Source: [lab/reports/prod-fid.md](../lab/reports/prod-fid.md); [lab/reports/prod-fid-rerun.md](../lab/reports/prod-fid-rerun.md); [lab/reports/prod-fix-1khz.md](../lab/reports/prod-fix-1khz.md); [lab/reports/prod-fid.audit.md](../lab/reports/prod-fid.audit.md); [lab/reports/prod-fid-rerun.audit.md](../lab/reports/prod-fid-rerun.audit.md); [lab/reports/prod-fix-1khz.audit.md](../lab/reports/prod-fix-1khz.audit.md).
+
+### Gate yields
+
+| Shard | Input | Gold | Silver | Adversarial | Rejected |
+|---|---:|---:|---:|---:|---:|
+| s1 | 38,944 | 4,830 | 7,569 | 11,106 | 15,439 |
+| s2 | 38,944 | 4,935 | 7,422 | 10,934 | 15,653 |
+| s3 | 38,944 | 4,964 | 7,443 | 10,929 | 15,608 |
+| s4 | 38,944 | 4,965 | 7,542 | 10,796 | 15,641 |
+| **Total** | **155,776** | **19,694** | **29,976** | **43,765** | **62,341** |
+
+Source: [lab/reports/prod-p3-render.md](../lab/reports/prod-p3-render.md); [lab/reports/prod-p4.md](../lab/reports/prod-p4.md).
+
+### Corpus export
+
+| File | Rows or status |
+|---|---:|
+| `data/corpus/V1.0.0/corpus_train.csv` | 157,462 train |
+| `data/corpus/V1.0.0/corpus_test.csv` | 3,114 test |
+| `data/corpus/V1.0.0/manifest.json` | present |
+| **Total** | **160,576** |
+
+Source: [lab/reports/prod-p4.md](../lab/reports/prod-p4.md).
+
+Locked data: `data/real/kixd/kixd_locked_day.csv` was untouched throughout.
+
+Source: [lab/reports/prod-fid-rerun.audit.md](../lab/reports/prod-fid-rerun.audit.md); [lab/reports/prod-fix-1khz.md](../lab/reports/prod-fix-1khz.md); [lab/reports/prod-fix-1khz.audit.md](../lab/reports/prod-fix-1khz.audit.md).
