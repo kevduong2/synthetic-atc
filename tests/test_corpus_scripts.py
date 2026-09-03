@@ -195,12 +195,19 @@ def test_converted_scenes_load_as_a_text_source(tmp_path):
 def write_manifest(dataset, rows):
     dataset = Path(dataset)
     (dataset / "wavs").mkdir(parents=True)
+    gated_rows = []
     with (dataset / "manifest.jsonl").open("w") as handle:
         for index, (kind, text) in enumerate(rows):
             (dataset / "wavs" / f"{index:06d}.wav").write_bytes(b"RIFF")
-            handle.write(json.dumps({
+            row = {
                 "audio": f"wavs/{index:06d}.wav", "text": text, "kind": kind,
-                "lineage": {"config_hash": "abc", "git_revision": "def"}}) + "\n")
+                "lineage": {"config_hash": "abc", "git_revision": "def"}}
+            handle.write(json.dumps(row) + "\n")
+            if text:
+                gated_rows.append({**row, "tier": "gold"})
+    if gated_rows:
+        (dataset / "manifest_gated.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in gated_rows))
     return dataset
 
 
@@ -222,7 +229,44 @@ def test_export_merges_several_runs_before_splitting(tmp_path):
     # hallucination control belongs in training and nowhere near the held-out set
     assert sum(1 for row in train if not row["text"].strip()) == 5
     assert all(row["text"].strip() for row in test)
+    assert {row["gate_tier"] for row in train + test} == {"gold", "noise"}
+    assert manifest["source"]["gate_tiers"] == {"gold": 20, "noise": 5}
     assert len(train) + len(test) == 25
+
+
+def test_export_rejects_unmatched_gate_clip_ids(tmp_path):
+    dataset = write_manifest(tmp_path / "run", [("KIXD", "roger")])
+    (dataset / "manifest_gated.jsonl").write_text("")
+
+    with pytest.raises(ValueError, match="unmatched clip ids.*1 missing"):
+        export_corpus_csv.main([
+            "--dataset", str(dataset), "--out", str(tmp_path / "corpus")])
+
+
+def test_export_preserves_all_speech_gate_tiers(tmp_path):
+    dataset = write_manifest(
+        tmp_path / "run",
+        [("KIXD", f"transmission {index}") for index in range(4)],
+    )
+    tiers = ["gold", "silver", "adversarial", "rejected"]
+    gated_rows = [
+        {**json.loads(line), "tier": tier}
+        for line, tier in zip(
+            (dataset / "manifest.jsonl").read_text().splitlines(), tiers,
+            strict=True,
+        )
+    ]
+    (dataset / "manifest_gated.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in gated_rows)
+    )
+
+    export_corpus_csv.main([
+        "--dataset", str(dataset), "--out", str(tmp_path / "corpus"),
+    ])
+
+    with (tmp_path / "corpus" / "corpus_train.csv").open(newline="") as handle:
+        exported = list(csv.DictReader(handle))
+    assert [row["gate_tier"] for row in exported] == tiers
 
 
 def test_noise_only_rows_do_not_move_the_speech_split(tmp_path):

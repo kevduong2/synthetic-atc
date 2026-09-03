@@ -214,9 +214,12 @@ uv run python scripts/export_corpus_csv.py --dataset runs/train_v1_s1 --dataset 
 ```
 
 Output: `data/corpus/V1.0.0/corpus_train.csv` + `corpus_test.csv` +
-`manifest.json` (sha256), matching the asr repo's V2.1.2 schema
-(`audio,text,suspect`, absolute paths, RFC4180). Noise-only rows go to train
-only; the test split is cut by transcript group, stratified by airport.
+`manifest.json` (sha256), extending the asr repo's V2.1.2 schema with
+`audio,text,suspect,gate_tier` (absolute paths, RFC4180). `gate_tier` is
+`gold`, `silver`, `adversarial`, or `rejected` for speech and `noise` for
+noise-only rows. Export fails unless every speech clip joins exactly to its
+sibling `manifest_gated.jsonl`. Noise-only rows go to train only; the test
+split is cut by transcript group, stratified by airport.
 
 Notes: `--version` is strictly `V<int>.<int>.<int>` (a suffix like
 `V1.0.0-dry` raises); `--test-frac` defaults to 0.02 (~3,100 test rows at full

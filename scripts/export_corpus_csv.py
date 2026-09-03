@@ -20,8 +20,10 @@ Three rules worth naming, because each is a judgement call the file cannot make
 for itself:
 
 * `suspect` is `False` on every row.  The flag marks human-doubted transcripts
-  in the real corpus; synthetic text is the label the TTS was handed, and rows
-  that failed QC or the gate were already filtered upstream.
+    in the real corpus; synthetic text is the label the TTS was handed.
+* `gate_tier` preserves the gate's `gold`, `silver`, `adversarial`, or
+    `rejected` assignment.  Speech manifests must have an exact clip-id match in
+    their sibling `manifest_gated.jsonl`; empty-text control rows use `noise`.
 * Noise-only rows (empty `text`) are dropped by default.  They are Whisper
   hallucination control, and a CSV consumer that reads `text` as ground truth
   will read them as transcription failures.  `--include-noise-only` keeps them,
@@ -42,11 +44,12 @@ import csv
 import hashlib
 import json
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-FIELDS = ["audio", "text", "suspect"]
+FIELDS = ["audio", "text", "suspect", "gate_tier"]
+GATE_TIERS = {"gold", "silver", "adversarial", "rejected"}
 
 
 def read_manifest(dataset: Path) -> list[dict]:
@@ -65,6 +68,46 @@ def read_manifest(dataset: Path) -> list[dict]:
     return rows
 
 
+def join_gate_tiers(dataset: Path, rows: list[dict]) -> None:
+    """Attach gate tiers, requiring an exact gated-manifest clip-id join."""
+    manifest = dataset / "manifest.jsonl" if dataset.is_dir() else dataset
+    gated_manifest = manifest.with_name("manifest_gated.jsonl")
+    speech_rows = [row for row in rows if row["text"].strip()]
+    if not gated_manifest.exists():
+        if speech_rows:
+            raise ValueError(f"no gate output for speech dataset: {gated_manifest}")
+        for row in rows:
+            row["gate_tier"] = "noise"
+        return
+
+    gated_by_audio = {}
+    for line in gated_manifest.open():
+        if not line.strip():
+            continue
+        gated = json.loads(line)
+        audio = (gated_manifest.parent / gated["audio"]).resolve()
+        tier = gated.get("tier")
+        if tier not in GATE_TIERS:
+            raise ValueError(f"invalid gate tier {tier!r} for {audio}")
+        if audio in gated_by_audio:
+            raise ValueError(f"duplicate clip id in gate output: {audio}")
+        gated_by_audio[audio] = tier
+
+    manifest_audio = {row["audio"] for row in rows}
+    speech_audio = {row["audio"] for row in speech_rows}
+    gated_audio = set(gated_by_audio)
+    missing_audio = speech_audio - gated_audio
+    extra_audio = gated_audio - manifest_audio
+    if missing_audio or extra_audio:
+        missing = len(missing_audio)
+        extra = len(extra_audio)
+        raise ValueError(f"unmatched clip ids in gate join: {missing} missing, {extra} extra")
+
+    for row in rows:
+        row["gate_tier"] = (gated_by_audio[row["audio"]]
+                            if row["text"].strip() else "noise")
+
+
 def read_manifests(datasets: list[Path]) -> tuple[list[dict], dict[str, int]]:
     """Merge several runs' manifests, keeping run order. Rejects duplicates.
 
@@ -75,6 +118,7 @@ def read_manifests(datasets: list[Path]) -> tuple[list[dict], dict[str, int]]:
     per_dataset = {}
     for dataset in datasets:
         loaded = read_manifest(dataset)
+        join_gate_tiers(dataset, loaded)
         per_dataset[str(dataset)] = len(loaded)
         rows.extend(loaded)
     seen = {row["audio"] for row in rows}
@@ -120,14 +164,15 @@ def split_rows(rows: list[dict], test_frac: float,
 
 
 def write_csv(path: Path, rows: list[dict]) -> str:
-    """Write the `audio,text,suspect` CSV and return its sha256."""
+    """Write the corpus CSV and return its sha256."""
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS,
                                 quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n")
         writer.writeheader()
         for row in rows:
             writer.writerow({"audio": row["audio"].as_posix(),
-                             "text": row["text"], "suspect": "False"})
+                             "text": row["text"], "suspect": "False",
+                             "gate_tier": row["gate_tier"]})
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -191,6 +236,7 @@ def main(argv=None):
             "rows_in_manifest": total,
             "noise_only_dropped": 0 if args.include_noise_only else len(noise_only),
             "noise_only_in_train": len(noise_only) if args.include_noise_only else 0,
+            "gate_tiers": dict(sorted(Counter(row["gate_tier"] for row in rows).items())),
             "train_rows": len(train),
             "test_rows": len(test),
             "test_frac_target": args.test_frac,
