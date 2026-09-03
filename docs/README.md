@@ -12,6 +12,7 @@ for behavior and thresholds.
 - [generation.md](generation.md) — scenario, speech, channel, and manifest generation.
 - [gate.md](gate.md) — teacher verification, entity checks, and dataset tiers.
 - [training-and-eval.md](training-and-eval.md) — student recipe, splits, and evaluation.
+- [training-guide-v1-corpus.md](training-guide-v1-corpus.md) — practical tier filtering, mixing, registration, and evaluation guidance for the V1.0.0 corpus.
 - [rl-loops.md](rl-loops.md) — L1, L2, and L3 boundaries and operations.
 - [cli-reference.md](cli-reference.md) — current command-line entry points and options.
 - [results.md](results.md) — evidence snapshot for 2026-08-25.
